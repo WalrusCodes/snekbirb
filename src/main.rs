@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 // One thing on a grid tile.
 #[derive(Debug, Clone)]
 enum Tile {
@@ -12,6 +14,8 @@ enum Tile {
     Snek(usize),
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
 enum Direction {
     Left,
     Right,
@@ -33,12 +37,33 @@ impl Pos {
         };
         Pos(x.0, x.1)
     }
+
+    /// Checks if given direction can be applied without going out of bounds.
+    fn can_apply(&self, dir: &Direction, rows: usize, cols: usize) -> bool {
+        match dir {
+            Direction::Left => self.1 != 0,
+            Direction::Right => self.1 < (cols - 1),
+            Direction::Up => self.0 != 0,
+            Direction::Down => self.0 < (rows - 1),
+        }
+    }
+
+    fn maybe_apply(&self, dir: &Direction, rows: usize, cols: usize) -> Option<Pos> {
+        if self.can_apply(dir, rows, cols) {
+            Some(self.apply(dir))
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 struct State {
     rows: Vec<Vec<Tile>>,
+    // For convenience, the number of sneks left on the grid.
     snek_count: usize,
+    // Moves made so far.
+    moves: Vec<Direction>,
 }
 
 impl State {
@@ -51,7 +76,11 @@ impl State {
             .collect();
         // TODO: support multiple sneks.
         let snek_count = 1;
-        State { rows, snek_count }
+        State {
+            rows,
+            snek_count,
+            moves: Vec::new(),
+        }
     }
 
     /// Parses a single line of level input, returns a row of tiles.
@@ -135,51 +164,12 @@ impl State {
         self.snek_count -= 1;
     }
 
-    /// Takes some state, applies one movement for one snek, builds new state.
-    //
-    // TODO: add support for more than one snek.
-    fn do_move(&self, dir: Direction) -> Option<State> {
-        let snek = self.find_snek();
-        let head = snek[0].clone();
-
-        // step 1: check if new tile is free or exit
-        let new_tile_pos = head.apply(&dir);
-        let new_tile = self.get(&new_tile_pos);
-
-        match new_tile {
-            Tile::Ground => {
-                return None;
-            }
-            Tile::Snek(_) => {
-                // TODO: try pushing if running into a different snek.
-                return None;
-            }
-            // TODO: only exit if all froot eaten.
-            // TODO: support stepping on exit tile without exiting if not all froot eaten.
-            Tile::Exit => {
-                println!("victory!");
-                let mut state = self.clone();
-                state.remove_snek(&snek);
-                return Some(state);
-            }
-            Tile::Empty => {}
-        };
-
-        // step 2: 2 -> 1 -> [new tile]
-        let mut state = self.clone();
-        // Set new head.
-        state.set(&new_tile_pos, &Tile::Snek(0));
-        // Move each segment but the last.
-        for idx in 0..(snek.len() - 1) {
-            state.set(&snek[idx], &Tile::Snek(idx + 1));
-        }
-        // Set last segment to empty.
-        state.set(&snek.last().unwrap(), &Tile::Empty);
-
-        // step 3: apply gravity
+    /// Applies gravity - makes sneks fall down until they are supported at least on one segment.
+    fn apply_gravity(&mut self) {
+        // TODO: support multiple sneks.
         loop {
-            let mut snek = state.find_snek();
-            if state.is_snek_supported(&snek) {
+            let mut snek = self.find_snek();
+            if self.is_snek_supported(&snek) {
                 break;
             }
             // sort the snek by rows so that we don't overwrite ourselves as we move the segments
@@ -193,53 +183,137 @@ impl State {
                 // into the exit not-head-first.
                 let pos_below = pos.apply(&Direction::Down);
 
-                if let Tile::Exit = state.get(&pos_below) {
+                if let Tile::Exit = self.get(&pos_below) {
                     println!("victory by falling into exit!");
-                    state.remove_snek(&snek);
-                    return Some(state);
+                    self.remove_snek(&snek);
+                    return;
                 }
-                state.set(&pos_below, &state.get(pos));
-                state.set(pos, &Tile::Empty);
+                self.set(&pos_below, &self.get(pos));
+                self.set(pos, &Tile::Empty);
             }
         }
+    }
+
+    /// Takes some state, applies one movement for one snek, builds new state.
+    //
+    // TODO: add support for more than one snek.
+    fn do_move(&self, dir: Direction) -> Option<State> {
+        let snek = self.find_snek();
+        let head = snek[0].clone();
+
+        // step 1: check if new tile is free or exit
+
+        // check if direction is valid based on current position and level boundaries
+        let new_tile_pos =
+            match head.maybe_apply(&dir, self.rows.len(), self.rows.first().unwrap().len()) {
+                Some(pos) => pos,
+                None => return None,
+            };
+        let new_tile = self.get(&new_tile_pos);
+
+        let mut state = self.clone();
+        state.moves.push(dir);
+
+        match new_tile {
+            Tile::Ground => {
+                return None;
+            }
+            Tile::Snek(_) => {
+                // TODO: try pushing if running into a different snek.
+                return None;
+            }
+            // TODO: only exit if all froot eaten.
+            // TODO: support stepping on exit tile without exiting if not all froot eaten.
+            Tile::Exit => {
+                state.remove_snek(&snek);
+                return Some(state);
+            }
+            Tile::Empty => {}
+        };
+
+        // step 2: 2 -> 1 -> [new tile]
+        // Set new head.
+        state.set(&new_tile_pos, &Tile::Snek(0));
+        // Move each segment but the last.
+        for idx in 0..(snek.len() - 1) {
+            state.set(&snek[idx], &Tile::Snek(idx + 1));
+        }
+        // Set last segment to empty.
+        state.set(&snek.last().unwrap(), &Tile::Empty);
+
+        // step 3: apply gravity
+        state.apply_gravity();
         Some(state)
     }
 }
 
 impl std::fmt::Display for State {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "sneks: {}\n", self.snek_count)?;
         for row in self.rows.iter() {
             f.write_str(&State::format_row(row))?;
-            // write!(f, "{}\n", State::format_row(row))?;
         }
         Ok(())
     }
 }
 
+struct SearchState {
+    /// States that we still need to examine.
+    queue: VecDeque<State>,
+}
+
+impl SearchState {
+    /// Parses the level file, creates initial queue of the first state.
+    fn load_level(filename: &str) -> SearchState {
+        let lines = std::fs::read_to_string(filename).unwrap();
+        let state = State::parse(&lines);
+        let mut queue = VecDeque::new();
+        queue.push_back(state);
+        SearchState { queue }
+    }
+
+    /// Pulls the front state off of the queue, tries out all possible movements, pushes new viable
+    /// states to the queue.
+    ///
+    /// Returns winning state if found, otherwise returns None.
+    fn process_one_state(&mut self) -> Option<State> {
+        let current = self.queue.pop_front().unwrap();
+        // try all possible directions:
+        let dirs_to_try = [
+            Direction::Left,
+            Direction::Right,
+            Direction::Up,
+            Direction::Down,
+        ];
+        for dir in dirs_to_try.iter() {
+            if let Some(new_state) = current.do_move(*dir) {
+                if new_state.snek_count == 0 {
+                    return Some(new_state);
+                }
+                self.queue.push_back(new_state);
+            }
+        }
+        // Did not get to victory yet.
+        None
+    }
+
+    /// Keeps processing items from the queue until victory or out of new states.
+    fn run(&mut self) -> Option<State> {
+        while !self.queue.is_empty() {
+            if let Some(winning_state) = self.process_one_state() {
+                println!("victory!!!");
+                println!("{}", winning_state);
+                return Some(winning_state);
+            }
+        }
+        None
+    }
+}
+
 fn main() {
-    let lines = std::fs::read_to_string("levels/1.txt").unwrap();
-    let state = State::parse(&lines);
-    println!("initial state:\n{}", &state);
+    let mut s = SearchState::load_level("levels/1.txt");
+    println!("initial state:\n{}", &s.queue.front().unwrap());
 
-    // moving right should result in a new state.
-    // let state_r = state.do_move(Direction::Right).unwrap();
-    // println!("resulting state:\n{}", &state_r);
-
-    // // moving up should result in a new state.
-    let state_u = state.do_move(Direction::Up).unwrap();
-    println!("resulting state:\n{}", &state_u);
-
-    // moving up, then right should result in snek falling.
-    let state_ur = state_u.do_move(Direction::Right).unwrap();
-    println!("resulting state:\n{}", &state_ur);
-    let state_urr = state_ur.do_move(Direction::Right).unwrap();
-    println!("resulting state:\n{}", &state_urr);
-    let state_urrr = state_urr.do_move(Direction::Right).unwrap();
-    println!("resulting state:\n{}", &state_urrr);
-    let state_urrrr = state_urrr.do_move(Direction::Right).unwrap();
-    println!("resulting state:\n{}", &state_urrrr);
-    dbg!(&state_urrrr.snek_count);
-
-    // confirm that we can't move down from the starting state.
-    // assert!(state.do_move(Direction::Down).is_none());
+    let maybe_state = s.run();
+    dbg!(&maybe_state);
 }
