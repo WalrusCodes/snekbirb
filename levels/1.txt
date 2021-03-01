@@ -1,6 +1,8 @@
-........
-.210#.E.
-.######.
+.........
+..10#..E.
+.#######.
+
+// optimal solution: URRRR (5 moves)
 
 // E: exit
 // #: ground

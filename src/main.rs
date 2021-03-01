@@ -38,6 +38,7 @@ impl Pos {
 #[derive(Debug, Clone)]
 struct State {
     rows: Vec<Vec<Tile>>,
+    snek_count: usize,
 }
 
 impl State {
@@ -48,7 +49,9 @@ impl State {
             .filter(|line| !(line.is_empty() || line.starts_with("//")))
             .map(State::parse_row)
             .collect();
-        State { rows }
+        // TODO: support multiple sneks.
+        let snek_count = 1;
+        State { rows, snek_count }
     }
 
     /// Parses a single line of level input, returns a row of tiles.
@@ -124,6 +127,14 @@ impl State {
         false
     }
 
+    /// Removes given snek from the state, decrements snek_count.
+    fn remove_snek(&mut self, snek: &[Pos]) {
+        for pos in snek.iter() {
+            self.set(pos, &Tile::Empty);
+        }
+        self.snek_count -= 1;
+    }
+
     /// Takes some state, applies one movement for one snek, builds new state.
     //
     // TODO: add support for more than one snek.
@@ -143,9 +154,13 @@ impl State {
                 // TODO: try pushing if running into a different snek.
                 return None;
             }
+            // TODO: only exit if all froot eaten.
+            // TODO: support stepping on exit tile without exiting if not all froot eaten.
             Tile::Exit => {
-                // TODO: return state without this snek.
-                panic!("victory!");
+                println!("victory!");
+                let mut state = self.clone();
+                state.remove_snek(&snek);
+                return Some(state);
             }
             Tile::Empty => {}
         };
@@ -179,8 +194,9 @@ impl State {
                 let pos_below = pos.apply(&Direction::Down);
 
                 if let Tile::Exit = state.get(&pos_below) {
-                    // TODO: return state without this snek.
-                    panic!("victory!");
+                    println!("victory by falling into exit!");
+                    state.remove_snek(&snek);
+                    return Some(state);
                 }
                 state.set(&pos_below, &state.get(pos));
                 state.set(pos, &Tile::Empty);
@@ -220,6 +236,9 @@ fn main() {
     println!("resulting state:\n{}", &state_urr);
     let state_urrr = state_urr.do_move(Direction::Right).unwrap();
     println!("resulting state:\n{}", &state_urrr);
+    let state_urrrr = state_urrr.do_move(Direction::Right).unwrap();
+    println!("resulting state:\n{}", &state_urrrr);
+    dbg!(&state_urrrr.snek_count);
 
     // confirm that we can't move down from the starting state.
     // assert!(state.do_move(Direction::Down).is_none());
