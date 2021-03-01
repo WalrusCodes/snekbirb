@@ -1,7 +1,10 @@
-use std::collections::VecDeque;
+use std::{
+    collections::{HashSet, VecDeque},
+    hash::Hash,
+};
 
 // One thing on a grid tile.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 enum Tile {
     // Empty space, we can move through this.
     Empty,
@@ -72,6 +75,22 @@ struct State {
     // Moves made so far.
     moves: Vec<Direction>,
 }
+
+impl PartialEq for State {
+    fn eq(&self, other: &Self) -> bool {
+        self.rows == other.rows
+    }
+}
+
+impl Hash for State {
+    fn hash<H: std::hash::Hasher>(&self, hasher: &mut H) {
+        for row in self.rows.iter() {
+            Hash::hash_slice(row, hasher);
+        }
+    }
+}
+
+impl Eq for State {}
 
 impl State {
     /// Finds all tiles of given type.
@@ -343,6 +362,8 @@ impl std::fmt::Display for State {
 struct SearchState {
     /// States that we still need to examine.
     queue: VecDeque<State>,
+    /// States that we have seen.
+    seen: HashSet<State>,
 }
 
 impl SearchState {
@@ -351,8 +372,10 @@ impl SearchState {
         let lines = std::fs::read_to_string(filename).unwrap();
         let state = State::parse(&lines);
         let mut queue = VecDeque::new();
-        queue.push_back(state);
-        SearchState { queue }
+        queue.push_back(state.clone());
+        let mut seen = HashSet::new();
+        seen.insert(state);
+        SearchState { queue, seen }
     }
 
     /// Pulls the front state off of the queue, tries out all possible movements, pushes new viable
@@ -370,9 +393,16 @@ impl SearchState {
         ];
         for dir in dirs_to_try.iter() {
             if let Some(new_state) = current.do_move(*dir) {
+                // If the new state results in victory, return it immediately.
                 if new_state.snek_count == 0 {
                     return Some(new_state);
                 }
+
+                // Check if we have seen the new state before, if so, discard it.
+                if self.seen.contains(&new_state) {
+                    continue;
+                }
+                self.seen.insert(new_state.clone());
                 self.queue.push_back(new_state);
             }
         }
