@@ -147,9 +147,10 @@ impl State {
     // TODO: pass in which snek.
     fn is_snek_supported(&self, snek: &[Pos]) -> bool {
         for pos in snek.iter() {
-            let tile_under = self.get(&pos.apply(&Direction::Down));
-            if let Tile::Ground = tile_under {
-                return true;
+            if let Some(tile_under_pos) = self.maybe_apply_pos(pos, Direction::Down) {
+                if let Tile::Ground = self.get(&tile_under_pos) {
+                    return true;
+                }
             }
             // TODO: fruit support snek too.
         }
@@ -165,12 +166,14 @@ impl State {
     }
 
     /// Applies gravity - makes sneks fall down until they are supported at least on one segment.
-    fn apply_gravity(&mut self) {
+    ///
+    /// Returns true iff snek is within bounds.
+    fn apply_gravity(&mut self) -> bool {
         // TODO: support multiple sneks.
         loop {
             let mut snek = self.find_snek();
             if self.is_snek_supported(&snek) {
-                break;
+                return true;
             }
             // sort the snek by rows so that we don't overwrite ourselves as we move the segments
             // down.
@@ -181,17 +184,25 @@ impl State {
                 // make sure we are not falling into the exit. we know that falling into exit
                 // head-first is a victory, but we are not sure what the real game does if you fall
                 // into the exit not-head-first.
-                let pos_below = pos.apply(&Direction::Down);
-
-                if let Tile::Exit = self.get(&pos_below) {
-                    println!("victory by falling into exit!");
-                    self.remove_snek(&snek);
-                    return;
+                if let Some(pos_below) = self.maybe_apply_pos(pos, Direction::Down) {
+                    if let Tile::Exit = self.get(&pos_below) {
+                        println!("victory by falling into exit!");
+                        self.remove_snek(&snek);
+                        return true;
+                    }
+                    self.set(&pos_below, &self.get(pos));
+                    self.set(pos, &Tile::Empty);
+                } else {
+                    // We tried to fall out of bounds.
+                    return false;
                 }
-                self.set(&pos_below, &self.get(pos));
-                self.set(pos, &Tile::Empty);
             }
         }
+    }
+
+    /// Applies direction to given position if able, based on level boundaries.
+    fn maybe_apply_pos(&self, pos: &Pos, dir: Direction) -> Option<Pos> {
+        return pos.maybe_apply(&dir, self.rows.len(), self.rows.first().unwrap().len());
     }
 
     /// Takes some state, applies one movement for one snek, builds new state.
@@ -204,11 +215,10 @@ impl State {
         // step 1: check if new tile is free or exit
 
         // check if direction is valid based on current position and level boundaries
-        let new_tile_pos =
-            match head.maybe_apply(&dir, self.rows.len(), self.rows.first().unwrap().len()) {
-                Some(pos) => pos,
-                None => return None,
-            };
+        let new_tile_pos = match self.maybe_apply_pos(&head, dir) {
+            Some(pos) => pos,
+            None => return None,
+        };
         let new_tile = self.get(&new_tile_pos);
 
         let mut state = self.clone();
@@ -241,9 +251,13 @@ impl State {
         // Set last segment to empty.
         state.set(&snek.last().unwrap(), &Tile::Empty);
 
-        // step 3: apply gravity
-        state.apply_gravity();
-        Some(state)
+        // step 3: apply gravity. if this returns false, snek was trying to fall off the level
+        // (with at least one segment being outside the bounds).
+        if !state.apply_gravity() {
+            None
+        } else {
+            Some(state)
+        }
     }
 }
 
