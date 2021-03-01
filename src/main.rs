@@ -9,6 +9,8 @@ enum Tile {
     Exit,
     // We can be supported by this.
     Ground,
+    // Froot can be eaten to elongate snek.
+    Fruit,
     // A segment of the snek, where 1 is head, and rest of the segments are incrementally higher
     // numbers.
     Snek(usize),
@@ -89,6 +91,7 @@ impl State {
             .map(|c| match c {
                 '.' => Tile::Empty,
                 'E' => Tile::Exit,
+                'F' => Tile::Fruit,
                 '#' => Tile::Ground,
                 '0'..='9' => Tile::Snek(c.to_digit(10).unwrap() as usize),
                 _ => {
@@ -103,6 +106,7 @@ impl State {
             .map(|tile| match tile {
                 Tile::Empty => '.',
                 Tile::Exit => 'E',
+                Tile::Fruit => 'F',
                 Tile::Ground => '#',
                 Tile::Snek(x) => std::char::from_digit(*x as u32, 10).unwrap(),
             })
@@ -148,11 +152,14 @@ impl State {
     fn is_snek_supported(&self, snek: &[Pos]) -> bool {
         for pos in snek.iter() {
             if let Some(tile_under_pos) = self.maybe_apply_pos(pos, Direction::Down) {
-                if let Tile::Ground = self.get(&tile_under_pos) {
-                    return true;
+                match self.get(&tile_under_pos) {
+                    Tile::Ground | Tile::Fruit => {
+                        return true;
+                    }
+                    // TODO: support being supported by other sneks.
+                    _ => {}
                 }
             }
-            // TODO: fruit support snek too.
         }
         false
     }
@@ -232,24 +239,32 @@ impl State {
                 // TODO: try pushing if running into a different snek.
                 return None;
             }
+            Tile::Fruit => {
+                // step 2: 2 -> 1 -> 0
+                state.set(&new_tile_pos, &Tile::Snek(0));
+                // increment the number on each snek segment by one.
+                for (idx, pos) in snek.iter().enumerate() {
+                    state.set(pos, &Tile::Snek(idx + 1));
+                }
+            }
             // TODO: only exit if all froot eaten.
             // TODO: support stepping on exit tile without exiting if not all froot eaten.
             Tile::Exit => {
                 state.remove_snek(&snek);
                 return Some(state);
             }
-            Tile::Empty => {}
+            Tile::Empty => {
+                // step 2: 2 -> 1 -> [new tile]
+                // Set new head.
+                state.set(&new_tile_pos, &Tile::Snek(0));
+                // Move each segment but the last.
+                for idx in 0..(snek.len() - 1) {
+                    state.set(&snek[idx], &Tile::Snek(idx + 1));
+                }
+                // Set last segment to empty.
+                state.set(&snek.last().unwrap(), &Tile::Empty);
+            }
         };
-
-        // step 2: 2 -> 1 -> [new tile]
-        // Set new head.
-        state.set(&new_tile_pos, &Tile::Snek(0));
-        // Move each segment but the last.
-        for idx in 0..(snek.len() - 1) {
-            state.set(&snek[idx], &Tile::Snek(idx + 1));
-        }
-        // Set last segment to empty.
-        state.set(&snek.last().unwrap(), &Tile::Empty);
 
         // step 3: apply gravity. if this returns false, snek was trying to fall off the level
         // (with at least one segment being outside the bounds).
@@ -314,6 +329,10 @@ impl SearchState {
     /// Keeps processing items from the queue until victory or out of new states.
     fn run(&mut self) -> Option<State> {
         while !self.queue.is_empty() {
+            if self.queue.len() > 100_000 {
+                panic!("too many states in queue");
+            }
+
             if let Some(winning_state) = self.process_one_state() {
                 println!("victory!!!");
                 println!("{}", winning_state);
@@ -325,7 +344,7 @@ impl SearchState {
 }
 
 fn main() {
-    let mut s = SearchState::load_level("levels/1.txt");
+    let mut s = SearchState::load_level("levels/2.txt");
     println!("initial state:\n{}", &s.queue.front().unwrap());
 
     let maybe_state = s.run();
