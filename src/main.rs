@@ -1,11 +1,12 @@
 use std::collections::VecDeque;
 
 // One thing on a grid tile.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum Tile {
     // Empty space, we can move through this.
     Empty,
-    // Level exit - we win if snek head gets here.
+    // Level exit - we win if snek head gets here. We use this enum for parsing, but then replace
+    // it with Empty in the state so that a snek can occupy the exit space before exit is open.
     Exit,
     // We can be supported by this.
     Ground,
@@ -26,7 +27,7 @@ enum Direction {
 }
 
 /// Position in the grid (row, col).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct Pos(usize, usize);
 
 impl Pos {
@@ -62,6 +63,10 @@ impl Pos {
 #[derive(Debug, Clone)]
 struct State {
     rows: Vec<Vec<Tile>>,
+    // Location of the exit tile.
+    exit_pos: Pos,
+    // For convenience, the number of fruit left on the grid.
+    fruit_count: usize,
     // For convenience, the number of sneks left on the grid.
     snek_count: usize,
     // Moves made so far.
@@ -69,6 +74,19 @@ struct State {
 }
 
 impl State {
+    /// Finds all tiles of given type.
+    fn find_tiles(&self, tile_cmp: &Tile) -> Vec<Pos> {
+        let mut out = Vec::new();
+        for (row_idx, row) in self.rows.iter().enumerate() {
+            for (col_idx, tile) in row.iter().enumerate() {
+                if tile == tile_cmp {
+                    out.push(Pos(row_idx, col_idx));
+                }
+            }
+        }
+        out
+    }
+
     /// Takes in all lines, parses them, builds state.
     fn parse(text: &str) -> State {
         let rows = text
@@ -76,13 +94,20 @@ impl State {
             .filter(|line| !(line.is_empty() || line.starts_with("//")))
             .map(State::parse_row)
             .collect();
-        // TODO: support multiple sneks.
-        let snek_count = 1;
-        State {
+        let mut tmp = State {
             rows,
-            snek_count,
+            exit_pos: Pos(0, 0), // placeholder
+            fruit_count: 0,      // placeholder
+            snek_count: 0,       // placeholder
             moves: Vec::new(),
-        }
+        };
+        tmp.snek_count = tmp.find_tiles(&Tile::Snek(0)).len();
+        tmp.fruit_count = tmp.find_tiles(&Tile::Fruit).len();
+        let mut exit_tiles = tmp.find_tiles(&Tile::Exit);
+        assert_eq!(exit_tiles.len(), 1);
+        tmp.exit_pos = exit_tiles.pop().unwrap();
+        tmp.set(&tmp.exit_pos.clone(), &Tile::Empty);
+        tmp
     }
 
     /// Parses a single line of level input, returns a row of tiles.
@@ -101,15 +126,23 @@ impl State {
             .collect()
     }
 
-    fn format_row(row: &[Tile]) -> String {
-        row.iter()
-            .map(|tile| match tile {
-                Tile::Empty => '.',
-                Tile::Exit => 'E',
-                Tile::Fruit => 'F',
-                Tile::Ground => '#',
-                Tile::Snek(x) => std::char::from_digit(*x as u32, 10).unwrap(),
-            })
+    fn format_tile(&self, pos: &Pos) -> char {
+        if *pos == self.exit_pos {
+            return 'E';
+        }
+        let tile = self.get(pos);
+        match tile {
+            Tile::Empty => '.',
+            Tile::Exit => 'E',
+            Tile::Fruit => 'F',
+            Tile::Ground => '#',
+            Tile::Snek(x) => std::char::from_digit(x as u32, 10).unwrap(),
+        }
+    }
+
+    fn format_row(&self, row_idx: usize) -> String {
+        (0..self.rows[0].len())
+            .map(|col_idx| self.format_tile(&Pos(row_idx, col_idx)))
             .chain(std::iter::once('\n'))
             .collect()
     }
@@ -192,7 +225,7 @@ impl State {
                 // head-first is a victory, but we are not sure what the real game does if you fall
                 // into the exit not-head-first.
                 if let Some(pos_below) = self.maybe_apply_pos(pos, Direction::Down) {
-                    if let Tile::Exit = self.get(&pos_below) {
+                    if pos_below == self.exit_pos && self.fruit_count == 0 {
                         println!("victory by falling into exit!");
                         self.remove_snek(&snek);
                         return true;
@@ -246,14 +279,18 @@ impl State {
                 for (idx, pos) in snek.iter().enumerate() {
                     state.set(pos, &Tile::Snek(idx + 1));
                 }
+                state.fruit_count -= 1;
             }
-            // TODO: only exit if all froot eaten.
-            // TODO: support stepping on exit tile without exiting if not all froot eaten.
             Tile::Exit => {
-                state.remove_snek(&snek);
-                return Some(state);
+                panic!("shouldn't happen");
             }
             Tile::Empty => {
+                // Check if we are about to step on the exit tile while it is open.
+                if new_tile_pos == self.exit_pos && self.fruit_count == 0 {
+                    state.remove_snek(&snek);
+                    return Some(state);
+                }
+
                 // step 2: 2 -> 1 -> [new tile]
                 // Set new head.
                 state.set(&new_tile_pos, &Tile::Snek(0));
@@ -274,13 +311,30 @@ impl State {
             Some(state)
         }
     }
+
+    /// Formats the moves that we took as a string.
+    fn format_moves(&self) -> String {
+        self.moves
+            .iter()
+            .map(|dir| match dir {
+                Direction::Left => 'L',
+                Direction::Right => 'R',
+                Direction::Up => 'U',
+                Direction::Down => 'D',
+            })
+            .collect()
+    }
 }
 
 impl std::fmt::Display for State {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "sneks: {}\n", self.snek_count)?;
-        for row in self.rows.iter() {
-            f.write_str(&State::format_row(row))?;
+        write!(
+            f,
+            "sneks: {} froot count: {} exit: {:?}\n",
+            self.snek_count, self.fruit_count, self.exit_pos
+        )?;
+        for row_idx in 0..self.rows.len() {
+            f.write_str(&self.format_row(row_idx))?;
         }
         Ok(())
     }
@@ -344,9 +398,11 @@ impl SearchState {
 }
 
 fn main() {
-    let mut s = SearchState::load_level("levels/2.txt");
+    let mut s = SearchState::load_level("levels/3.txt");
     println!("initial state:\n{}", &s.queue.front().unwrap());
 
     let maybe_state = s.run();
-    dbg!(&maybe_state);
+    if let Some(winning_state) = maybe_state {
+        println!("winning moves: {}", winning_state.format_moves());
+    }
 }
