@@ -15,6 +15,8 @@ enum Tile {
     Ground,
     // Froot can be eaten to elongate snek.
     Fruit,
+    // Spiky boi - stepping on it, you ded.
+    Spike,
     // A segment of the snek, where 1 is head, and rest of the segments are incrementally higher
     // numbers.
     Snek(usize),
@@ -137,6 +139,7 @@ impl State {
                 'E' => Tile::Exit,
                 'F' => Tile::Fruit,
                 '#' => Tile::Ground,
+                '*' => Tile::Spike,
                 '0'..='9' => Tile::Snek(c.to_digit(10).unwrap() as usize),
                 _ => {
                     panic!("invalid input: {}", line);
@@ -155,6 +158,7 @@ impl State {
             Tile::Exit => 'E',
             Tile::Fruit => 'F',
             Tile::Ground => '#',
+            Tile::Spike => '*',
             Tile::Snek(x) => std::char::from_digit(x as u32, 10).unwrap(),
         }
     }
@@ -244,6 +248,10 @@ impl State {
                 // head-first is a victory, but we are not sure what the real game does if you fall
                 // into the exit not-head-first.
                 if let Some(pos_below) = self.maybe_apply_pos(pos, Direction::Down) {
+                    if let Tile::Spike = self.get(&pos_below) {
+                        // we are falling on a spike, so this is a dead-end
+                        return false;
+                    }
                     if pos_below == self.exit_pos && self.fruit_count == 0 {
                         println!("victory by falling into exit!");
                         self.remove_snek(&snek);
@@ -285,6 +293,9 @@ impl State {
 
         match new_tile {
             Tile::Ground => {
+                return None;
+            }
+            Tile::Spike => {
                 return None;
             }
             Tile::Snek(_) => {
@@ -428,7 +439,7 @@ impl SearchState {
 }
 
 fn main() {
-    let mut s = SearchState::load_level("levels/3.txt");
+    let mut s = SearchState::load_level("levels/4.txt");
     println!("initial state:\n{}", &s.queue.front().unwrap());
 
     let maybe_state = s.run();
