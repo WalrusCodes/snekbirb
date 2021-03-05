@@ -326,40 +326,6 @@ impl State {
             }
         }
         true
-        /*
-        loop {
-            let mut snek = self.find_snek();
-            if self.is_snek_supported(&snek) {
-                return true;
-            }
-            // sort the snek by rows so that we don't overwrite ourselves as we move the segments
-            // down.
-            snek.sort_unstable_by_key(|pos| pos.0);
-            // snek segments should be sorted by row, smallest (higher rows first). we want to
-            // iterate from highest numbered rows first.
-            for pos in snek.iter().rev() {
-                // make sure we are not falling into the exit. we know that falling into exit
-                // head-first is a victory, but we are not sure what the real game does if you fall
-                // into the exit not-head-first.
-                if let Some(pos_below) = self.maybe_apply_pos(pos, Direction::Down) {
-                    if let Tile::Spike = self.get(&pos_below) {
-                        // we are falling on a spike, so this is a dead-end
-                        return false;
-                    }
-                    if pos_below == self.exit_pos && self.fruit_count == 0 {
-                        println!("victory by falling into exit!");
-                        self.remove_snek(&snek);
-                        return true;
-                    }
-                    self.set(&pos_below, &self.get(pos));
-                    self.set(pos, &Tile::Empty);
-                } else {
-                    // We tried to fall out of bounds.
-                    return false;
-                }
-            }
-        }
-        */
     }
 
     /// Applies direction to given position if able, based on level boundaries.
@@ -650,8 +616,6 @@ impl SearchState {
                     //     snek_idx,
                     //     dir
                     // );
-                    // self.moves
-                    //     .insert(new_state.moves.clone(), new_state.clone());
                     self.seen.insert(new_state.clone());
                     self.queue.push_back(new_state);
                 }
