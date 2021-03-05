@@ -29,7 +29,7 @@ enum Tile {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Direction {
     Left,
     Right,
@@ -78,6 +78,10 @@ impl Pos {
     }
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+struct Move(usize, Direction);
+type Moves = Vec<Move>;
+
 #[derive(Debug, Clone)]
 struct State {
     rows: Vec<Vec<Tile>>,
@@ -91,7 +95,7 @@ struct State {
     // For convenience, the number of sneks left on the grid.
     snek_count: usize,
     // Moves made so far.
-    moves: Vec<(usize, Direction)>,
+    moves: Moves,
 }
 
 impl PartialEq for State {
@@ -509,7 +513,7 @@ impl State {
         let new_tile = self.get(&new_tile_pos);
 
         let mut state = self.clone();
-        state.moves.push((snek_idx, dir));
+        state.moves.push(Move(snek_idx, dir));
 
         match new_tile {
             Tile::Ground => {
@@ -517,11 +521,6 @@ impl State {
             }
             Tile::Spike => {
                 return None;
-            }
-            Tile::SomeSnek(_) => {
-                if state.push(Some(snek_idx), &new_tile_pos, dir) != PushResult::Moved {
-                    return None;
-                }
             }
             Tile::Fruit => {
                 // fruit om nom nom nom
@@ -532,7 +531,14 @@ impl State {
             Tile::Exit | Tile::RawSnek(_) => {
                 panic!("shouldn't happen");
             }
-            Tile::Empty => {
+            Tile::Empty | Tile::SomeSnek(_) => {
+                // If we stepping on SomeSnek, it means we are pushing. See if we can push.
+                if let Tile::SomeSnek(_) = new_tile {
+                    if state.push(Some(snek_idx), &new_tile_pos, dir) != PushResult::Moved {
+                        return None;
+                    }
+                }
+
                 // Check if we are about to step on the exit tile while it is open.
                 if new_tile_pos == self.exit_pos && self.fruit_count == 0 {
                     state.remove_snek(snek_idx);
@@ -563,7 +569,7 @@ impl State {
     fn format_moves(&self) -> String {
         let mut out: Vec<char> = Vec::new();
         let mut prev_snek_idx = 999;
-        for (snek_idx, dir) in self.moves.iter() {
+        for Move(snek_idx, dir) in self.moves.iter() {
             if *snek_idx != prev_snek_idx {
                 if prev_snek_idx != 999 {
                     out.push(' ');
@@ -602,6 +608,8 @@ struct SearchState {
     queue: VecDeque<State>,
     /// States that we have seen.
     seen: HashSet<State>,
+    /// Mapping from moves to state.
+    moves: HashMap<Moves, State>,
 }
 
 impl SearchState {
@@ -613,7 +621,11 @@ impl SearchState {
         queue.push_back(state.clone());
         let mut seen = HashSet::new();
         seen.insert(state);
-        SearchState { queue, seen }
+        SearchState {
+            queue,
+            seen,
+            moves: HashMap::new(),
+        }
     }
 
     /// Pulls the front state off of the queue, tries out all possible movements, pushes new viable
@@ -633,7 +645,7 @@ impl SearchState {
         // First try the previous snek so that the final sequence of moves alternates between the
         // sneks less, if possible.
         let snek_idx_iter = 0..current.sneks.len();
-        let sneks_to_try: Vec<usize> = if let Some(&(last_idx, _)) = current.moves.last() {
+        let sneks_to_try: Vec<usize> = if let Some(&Move(last_idx, _)) = current.moves.last() {
             once(last_idx)
                 .chain(snek_idx_iter.filter(|x| *x != last_idx))
                 .collect()
@@ -670,6 +682,8 @@ impl SearchState {
                     //     snek_idx,
                     //     dir
                     // );
+                    self.moves
+                        .insert(new_state.moves.clone(), new_state.clone());
                     self.seen.insert(new_state.clone());
                     self.queue.push_back(new_state);
                 }
@@ -687,8 +701,8 @@ impl SearchState {
             }
 
             if let Some(winning_state) = self.process_one_state() {
-                println!("victory!!!");
-                println!("{}", winning_state);
+                // println!("victory!!!");
+                // println!("{}", winning_state);
                 return Some(winning_state);
             }
         }
@@ -702,6 +716,11 @@ pub fn solve(file: &Path) -> Option<String> {
     println!("initial state:\n{}", &s.queue.front().unwrap());
 
     if let Some(winning_state) = s.run() {
+        for m in 1..winning_state.moves.len() {
+            let moves: Moves = winning_state.moves[0..m].iter().cloned().collect();
+            // println!("moves: {:?}", &moves);
+            println!("{}", s.moves.get(&moves).unwrap());
+        }
         // println!("winning moves: {}", winning_state.format_moves());
         Some(winning_state.format_moves())
     } else {
