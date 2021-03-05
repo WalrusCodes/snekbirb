@@ -5,6 +5,13 @@ use std::{
     path::Path,
 };
 
+mod alloc;
+
+use alloc::CountingAlloc;
+
+#[global_allocator]
+static ALLOCATOR: CountingAlloc = CountingAlloc::new();
+
 // One thing on a grid tile.
 #[derive(Debug, Clone, PartialEq, Hash)]
 enum Tile {
@@ -726,19 +733,28 @@ impl SearchState {
 
 /// Loads a level from given path, tries to solve it, and if successful, returns the winning moves.
 pub fn solve(file: &Path) -> Option<String> {
+    println!("initial memory usage: {}", ALLOCATOR.get_current());
     let mut s = SearchState::load_level(file);
     println!("initial state:\n{}", &s.queue.front().unwrap());
 
-    if let Some(winning_state) = s.run() {
+    let result = s.run();
+
+    // println!("total moves considered: {}", s.moves.len());
+    println!(
+        "ending memory usage: {} max: {}",
+        ALLOCATOR.get_current(),
+        ALLOCATOR.get_max()
+    );
+    if let Some(winning_state) = result {
+        /*
         for m in 1..winning_state.moves.len() {
             let moves: Moves = winning_state.moves[0..m].iter().cloned().collect();
             // println!("moves: {:?}", &moves);
             println!("{}", s.moves.get(&moves).unwrap());
         }
-        // println!("winning moves: {}", winning_state.format_moves());
+        */
         Some(winning_state.format_moves())
     } else {
-        println!("{} moves considered", s.moves.len());
         None
     }
 }
