@@ -233,29 +233,6 @@ impl State {
         self.rows[pos.0][pos.1] = tile.clone();
     }
 
-    /*
-    /// Finds positions of snek segments.
-    ///
-    /// Returned vector contains positions of snek segments, with head being in position 0.
-    // TODO: add support for more than one snek.
-    fn find_snek(&self) -> Vec<Pos> {
-        let mut snek = Vec::<Pos>::new();
-
-        // Scan through the tiles, look for Tile::Sneks, put them in the right position.
-        for (row_idx, row) in self.rows.iter().enumerate() {
-            for (col_idx, tile) in row.iter().enumerate() {
-                if let Tile::Snek(snek_num) = tile {
-                    if (*snek_num + 1) >= snek.len() {
-                        snek.resize(snek_num + 1, Pos(99999, 99999));
-                    }
-                    snek[*snek_num] = Pos(row_idx, col_idx);
-                }
-            }
-        }
-        snek
-    }
-    */
-
     /// Finds positions of all snek segments.
     ///
     /// Returned vector contains vectors, which contain positions of snek segments, with head being
@@ -299,34 +276,13 @@ impl State {
         out
     }
 
-    /*
-    /// Returns true if any segment of the snek is sitting on something solid (just Ground for
-    /// now).
-    //
-    // TODO: pass in which snek.
-    fn is_snek_supported(&self, snek: &[Pos]) -> bool {
-        for pos in snek.iter() {
-            if let Some(tile_under_pos) = self.maybe_apply_pos(pos, Direction::Down) {
-                match self.get(&tile_under_pos) {
-                    Tile::Ground | Tile::Fruit => {
-                        return true;
-                    }
-                    // TODO: support being supported by other sneks.
-                    _ => {}
-                }
-            }
-        }
-        false
-    }
-    */
-
     /// Removes given snek from the state, decrements snek_count.
-    fn remove_snek(&mut self, snek_idx: usize) {
-        let snek_poses = self.sneks[snek_idx].clone();
+    fn remove_snek(&mut self, snek_idx: u8) {
+        let snek_poses = self.sneks[snek_idx as usize].clone();
         for pos in snek_poses.iter() {
             self.set(&pos, &Tile::Empty);
         }
-        self.sneks[snek_idx].clear();
+        self.sneks[snek_idx as usize].clear();
         self.snek_count -= 1;
     }
 
