@@ -1,6 +1,7 @@
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     hash::Hash,
+    iter::once,
     path::Path,
 };
 
@@ -18,9 +19,13 @@ enum Tile {
     Fruit,
     // Spiky boi - stepping on it, you ded.
     Spike,
-    // A segment of the snek, where 1 is head, and rest of the segments are incrementally higher
-    // numbers.
-    Snek(usize),
+    // A segment of the snek, where 0 is head, and rest of the segments are incrementally higher
+    // numbers. A gap in numbers denotes start of a different snek. We only use RawSnek when
+    // loading the level.
+    RawSnek(usize),
+    // A segment of the snek. The number describes which Snek it is (0: first snek, 1: second
+    // snek, etc.).
+    SomeSnek(usize),
 }
 
 #[allow(dead_code)]
@@ -32,8 +37,15 @@ enum Direction {
     Down,
 }
 
+#[derive(PartialEq)]
+enum PushResult {
+    Moved,
+    DidNotMove,
+    WouldDie,
+}
+
 /// Position in the grid (row, col).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy, Hash)]
 struct Pos(usize, usize);
 
 impl Pos {
@@ -73,15 +85,18 @@ struct State {
     exit_pos: Pos,
     // For convenience, the number of fruit left on the grid.
     fruit_count: usize,
+    // Sneks on a grid: each outer vector describes a snek, inner vector describes positions of the
+    // segments, head first. When snek is gone, an empty vector remains.
+    sneks: Vec<Vec<Pos>>,
     // For convenience, the number of sneks left on the grid.
     snek_count: usize,
     // Moves made so far.
-    moves: Vec<Direction>,
+    moves: Vec<(usize, Direction)>,
 }
 
 impl PartialEq for State {
     fn eq(&self, other: &Self) -> bool {
-        self.rows == other.rows
+        self.rows == other.rows && self.sneks == other.sneks
     }
 }
 
@@ -90,23 +105,34 @@ impl Hash for State {
         for row in self.rows.iter() {
             Hash::hash_slice(row, hasher);
         }
+        for snek in self.sneks.iter() {
+            Hash::hash_slice(snek, hasher);
+        }
     }
 }
 
 impl Eq for State {}
 
 impl State {
-    /// Finds all tiles of given type.
-    fn find_tiles(&self, tile_cmp: &Tile) -> Vec<Pos> {
+    /// Finds all tiles that match given predicatve.
+    fn find_tiles_by_predicate<F>(&self, fun: F) -> Vec<Pos>
+    where
+        F: Fn(&Tile) -> bool,
+    {
         let mut out = Vec::new();
         for (row_idx, row) in self.rows.iter().enumerate() {
             for (col_idx, tile) in row.iter().enumerate() {
-                if tile == tile_cmp {
+                if fun(tile) {
                     out.push(Pos(row_idx, col_idx));
                 }
             }
         }
         out
+    }
+
+    /// Finds all tiles of given type.
+    fn find_tiles(&self, tile_cmp: &Tile) -> Vec<Pos> {
+        self.find_tiles_by_predicate(|t| t == tile_cmp)
     }
 
     /// Takes in all lines, parses them, builds state.
@@ -119,17 +145,31 @@ impl State {
         let mut tmp = State {
             rows,
             exit_pos: Pos(0, 0), // placeholder
-            fruit_count: 0,      // placeholder
-            snek_count: 0,       // placeholder
+            sneks: Vec::new(),
+            fruit_count: 0, // placeholder
+            snek_count: 0,  // placeholder
             moves: Vec::new(),
         };
-        tmp.snek_count = tmp.find_tiles(&Tile::Snek(0)).len();
+        let sneks = tmp.find_sneks();
+        // Replace RawSneks with SomeSneks which describe just which snek it is.
+        for (idx, segments) in sneks.iter().enumerate() {
+            for pos in segments.iter() {
+                tmp.set(pos, &Tile::SomeSnek(idx));
+            }
+        }
+        tmp.sneks = sneks;
+
+        tmp.snek_count = tmp.sneks.len();
         tmp.fruit_count = tmp.find_tiles(&Tile::Fruit).len();
         let mut exit_tiles = tmp.find_tiles(&Tile::Exit);
         assert_eq!(exit_tiles.len(), 1);
         tmp.exit_pos = exit_tiles.pop().unwrap();
         tmp.set(&tmp.exit_pos.clone(), &Tile::Empty);
         tmp
+    }
+
+    fn from_base36(c: char) -> usize {
+        c.to_digit(36).unwrap() as usize
     }
 
     /// Parses a single line of level input, returns a row of tiles.
@@ -141,7 +181,7 @@ impl State {
                 'F' => Tile::Fruit,
                 '#' => Tile::Ground,
                 '*' => Tile::Spike,
-                '0'..='9' => Tile::Snek(c.to_digit(10).unwrap() as usize),
+                '0'..='9' | 'a'..='z' => Tile::RawSnek(State::from_base36(c)),
                 _ => {
                     panic!("invalid input: {}", line);
                 }
@@ -160,7 +200,8 @@ impl State {
             Tile::Fruit => 'F',
             Tile::Ground => '#',
             Tile::Spike => '*',
-            Tile::Snek(x) => std::char::from_digit(x as u32, 10).unwrap(),
+            Tile::RawSnek(x) => std::char::from_digit(x as u32, 36).unwrap(),
+            Tile::SomeSnek(x) => std::char::from_digit(x as u32, 36).unwrap(),
         }
     }
 
@@ -181,6 +222,7 @@ impl State {
         self.rows[pos.0][pos.1] = tile.clone();
     }
 
+    /*
     /// Finds positions of snek segments.
     ///
     /// Returned vector contains positions of snek segments, with head being in position 0.
@@ -201,7 +243,52 @@ impl State {
         }
         snek
     }
+    */
 
+    /// Finds positions of all snek segments.
+    ///
+    /// Returned vector contains vectors, which contain positions of snek segments, with head being
+    /// in position 0.
+    fn find_sneks(&self) -> Vec<Vec<Pos>> {
+        // 012   <-- snek #0
+        // 456   <-- snek #1
+
+        let snek_poses = self.find_tiles_by_predicate(|t| matches!(t, Tile::RawSnek(_)));
+
+        // A mapping of all snek indices to their positions.
+        let mut snek_indices: HashMap<usize, Pos> = HashMap::new();
+        for pos in snek_poses.iter() {
+            if let Tile::RawSnek(idx) = self.get(pos) {
+                assert!(snek_indices.insert(idx, pos.clone()).is_none());
+            }
+        }
+
+        // Sort the indices. After this, we have a vector that looks like this: [0, 1, 2, 4, 5, 6].
+        let mut sorted_snek_indices: Vec<usize> = snek_indices.keys().cloned().collect();
+        sorted_snek_indices.sort();
+
+        // Walk through the vector, split into ranges based on gaps.
+        let mut out: Vec<Vec<Pos>> = Vec::new();
+        let mut last_idx = 0;
+        let mut first = true;
+        for idx in sorted_snek_indices.iter() {
+            // 012456
+            //   ^
+            //   last_idx = 2  idx = 4  -> gap
+            //   last_idx = 1  idx = 2  -> no gap
+            if first || ((last_idx + 1) < *idx) {
+                out.push(Vec::new());
+            }
+            out.last_mut()
+                .unwrap()
+                .push(snek_indices.get(idx).unwrap().clone());
+            first = false;
+            last_idx = *idx;
+        }
+        out
+    }
+
+    /*
     /// Returns true if any segment of the snek is sitting on something solid (just Ground for
     /// now).
     //
@@ -220,20 +307,44 @@ impl State {
         }
         false
     }
+    */
 
     /// Removes given snek from the state, decrements snek_count.
-    fn remove_snek(&mut self, snek: &[Pos]) {
-        for pos in snek.iter() {
-            self.set(pos, &Tile::Empty);
+    fn remove_snek(&mut self, snek_idx: usize) {
+        let snek_poses = self.sneks[snek_idx].clone();
+        for pos in snek_poses.iter() {
+            self.set(&pos, &Tile::Empty);
         }
+        self.sneks[snek_idx].clear();
         self.snek_count -= 1;
     }
 
     /// Applies gravity - makes sneks fall down until they are supported at least on one segment.
     ///
-    /// Returns true iff snek is within bounds.
+    /// Returns true iff sneks are within bounds & didn't die.
     fn apply_gravity(&mut self) -> bool {
-        // TODO: support multiple sneks.
+        // keep trying to push each object down until nothing moves.
+        let mut again = true;
+        while again {
+            again = false;
+            for idx in 0..self.sneks.len() {
+                if self.sneks[idx].is_empty() {
+                    continue;
+                }
+                let pos = self.sneks[idx].first().unwrap().clone();
+                match self.push(None, &pos, Direction::Down) {
+                    PushResult::Moved => {
+                        again = true;
+                    }
+                    PushResult::DidNotMove => {}
+                    PushResult::WouldDie => {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+        /*
         loop {
             let mut snek = self.find_snek();
             if self.is_snek_supported(&snek) {
@@ -266,6 +377,7 @@ impl State {
                 }
             }
         }
+        */
     }
 
     /// Applies direction to given position if able, based on level boundaries.
@@ -273,11 +385,118 @@ impl State {
         return pos.maybe_apply(&dir, self.rows.len(), self.rows.first().unwrap().len());
     }
 
+    fn get_object_id(tile: &Tile) -> usize {
+        match tile {
+            Tile::SomeSnek(idx) => *idx,
+            _ => panic!("not the right tile: {:?}", tile),
+        }
+    }
+
+    /// Tries pushing the new tile in given direction, transitively pushing everything
+    /// that can move.
+    ///
+    /// If maybe_snek_idx is passed in, that's the snek that's causing the pushing and cannot be
+    /// moved.
+    fn push(
+        &mut self,
+        maybe_snek_idx: Option<usize>,
+        tile_pos: &Pos,
+        dir: Direction,
+    ) -> PushResult {
+        // Objects that are already moving.
+        let mut moving: HashSet<usize> = HashSet::new();
+        // Objects that we need to test.
+        let mut queue: VecDeque<usize> = VecDeque::new();
+
+        let obj_idx = State::get_object_id(&self.get(tile_pos));
+        queue.push_back(obj_idx);
+        moving.insert(obj_idx);
+
+        while !queue.is_empty() {
+            let idx = queue.pop_front().unwrap();
+            let mut has_solid_rest = false;
+            let mut has_spike = false;
+            for pos in self.sneks[idx].iter() {
+                if let Some(new_pos) = self.maybe_apply_pos(pos, dir) {
+                    match self.get(&new_pos) {
+                        Tile::Empty => (),
+                        Tile::Spike => {
+                            has_spike = true;
+                        }
+                        Tile::Fruit | Tile::Ground => {
+                            has_solid_rest = true;
+                        }
+                        Tile::SomeSnek(other_idx) => {
+                            if maybe_snek_idx.is_some() && maybe_snek_idx.unwrap() == other_idx {
+                                // trying to push ourselves -> bad
+                                return PushResult::DidNotMove;
+                            }
+                            if !moving.contains(&other_idx) {
+                                // trying to push something that we don't know if it moves yet
+                                queue.push_back(other_idx);
+                                moving.insert(other_idx);
+                            }
+                        }
+                        Tile::Exit | Tile::RawSnek(_) => panic!("shouldn't be seeing these"),
+                    }
+                } else {
+                    // out of bounds
+                    return PushResult::WouldDie;
+                }
+            }
+            if has_solid_rest {
+                return PushResult::DidNotMove;
+            } else if has_spike {
+                return PushResult::WouldDie;
+            }
+        }
+
+        // If we are here, it means the original object that was being pushed can move, possibly
+        // also moving other objects. We perform the move here, checking for exit as well.
+
+        // dbg!("moving: ", &moving);
+        // println!("{}", &self);
+
+        let mut new_rows = self.rows.clone();
+        let mut new_sneks = self.sneks.clone();
+        // Clear out the objects being moved.
+        for obj_idx in moving.iter() {
+            for pos in self.sneks[*obj_idx].iter() {
+                new_rows[pos.0][pos.1] = Tile::Empty;
+            }
+        }
+        // Now reapply with the movement.
+        for obj_idx in moving.iter() {
+            new_sneks[*obj_idx].clear();
+            for pos in self.sneks[*obj_idx].iter() {
+                let new_pos = pos.apply(&dir);
+                new_rows[new_pos.0][new_pos.1] = self.rows[pos.0][pos.1].clone();
+                new_sneks[*obj_idx].push(new_pos);
+            }
+        }
+        self.rows = new_rows;
+        self.sneks = new_sneks;
+
+        // Check if any snek moved into exit.
+        if self.fruit_count == 0 {
+            for obj_idx in moving.iter() {
+                if let Some(snek_head) = self.sneks[*obj_idx].first() {
+                    if *snek_head == self.exit_pos {
+                        self.remove_snek(*obj_idx);
+                    }
+                }
+            }
+        }
+
+        // dbg!("after move");
+        // println!("{}", &self);
+
+        PushResult::Moved
+    }
+
     /// Takes some state, applies one movement for one snek, builds new state.
-    //
-    // TODO: add support for more than one snek.
-    fn do_move(&self, dir: Direction) -> Option<State> {
-        let snek = self.find_snek();
+    fn do_move(&self, snek_idx: usize, dir: Direction) -> Option<State> {
+        let snek = &self.sneks[snek_idx];
         let head = snek[0].clone();
 
         // step 1: check if new tile is free or exit
@@ -290,7 +509,7 @@ impl State {
         let new_tile = self.get(&new_tile_pos);
 
         let mut state = self.clone();
-        state.moves.push(dir);
+        state.moves.push((snek_idx, dir));
 
         match new_tile {
             Tile::Ground => {
@@ -299,61 +518,68 @@ impl State {
             Tile::Spike => {
                 return None;
             }
-            Tile::Snek(_) => {
-                // TODO: try pushing if running into a different snek.
-                return None;
+            Tile::SomeSnek(_) => {
+                if state.push(Some(snek_idx), &new_tile_pos, dir) != PushResult::Moved {
+                    return None;
+                }
             }
             Tile::Fruit => {
-                // step 2: 2 -> 1 -> 0
-                state.set(&new_tile_pos, &Tile::Snek(0));
-                // increment the number on each snek segment by one.
-                for (idx, pos) in snek.iter().enumerate() {
-                    state.set(pos, &Tile::Snek(idx + 1));
-                }
+                // fruit om nom nom nom
+                state.set(&new_tile_pos, &Tile::SomeSnek(snek_idx));
+                state.sneks[snek_idx].insert(0, new_tile_pos);
                 state.fruit_count -= 1;
             }
-            Tile::Exit => {
+            Tile::Exit | Tile::RawSnek(_) => {
                 panic!("shouldn't happen");
             }
             Tile::Empty => {
                 // Check if we are about to step on the exit tile while it is open.
                 if new_tile_pos == self.exit_pos && self.fruit_count == 0 {
-                    state.remove_snek(&snek);
-                    return Some(state);
+                    state.remove_snek(snek_idx);
+                } else {
+                    // Insert the new head, remove last segment.
+                    let new_snek = &mut state.sneks[snek_idx];
+                    new_snek.insert(0, new_tile_pos); // note: inefficient!
+                    new_snek.pop();
+                    // Set last segment to empty.
+                    state.set(&new_tile_pos, &Tile::SomeSnek(snek_idx));
+                    state.set(&snek.last().unwrap(), &Tile::Empty);
                 }
-
-                // step 2: 2 -> 1 -> [new tile]
-                // Set new head.
-                state.set(&new_tile_pos, &Tile::Snek(0));
-                // Move each segment but the last.
-                for idx in 0..(snek.len() - 1) {
-                    state.set(&snek[idx], &Tile::Snek(idx + 1));
-                }
-                // Set last segment to empty.
-                state.set(&snek.last().unwrap(), &Tile::Empty);
             }
         };
 
         // step 3: apply gravity. if this returns false, snek was trying to fall off the level
         // (with at least one segment being outside the bounds).
         if !state.apply_gravity() {
+            // println!("gravity says no");
             None
         } else {
+            // println!("gravity says ok");
             Some(state)
         }
     }
 
     /// Formats the moves that we took as a string.
     fn format_moves(&self) -> String {
-        self.moves
-            .iter()
-            .map(|dir| match dir {
+        let mut out: Vec<char> = Vec::new();
+        let mut prev_snek_idx = 999;
+        for (snek_idx, dir) in self.moves.iter() {
+            if *snek_idx != prev_snek_idx {
+                if prev_snek_idx != 999 {
+                    out.push(' ');
+                }
+                out.push(std::char::from_digit(*snek_idx as u32, 10).unwrap());
+                out.push(':');
+                prev_snek_idx = *snek_idx;
+            }
+            out.push(match dir {
                 Direction::Left => 'L',
                 Direction::Right => 'R',
                 Direction::Up => 'U',
                 Direction::Down => 'D',
-            })
-            .collect()
+            });
+        }
+        out.iter().collect()
     }
 }
 
@@ -395,27 +621,58 @@ impl SearchState {
     ///
     /// Returns winning state if found, otherwise returns None.
     fn process_one_state(&mut self) -> Option<State> {
-        let current = self.queue.pop_front().unwrap();
-        // try all possible directions:
         let dirs_to_try = [
             Direction::Left,
             Direction::Right,
             Direction::Up,
             Direction::Down,
         ];
-        for dir in dirs_to_try.iter() {
-            if let Some(new_state) = current.do_move(*dir) {
-                // If the new state results in victory, return it immediately.
-                if new_state.snek_count == 0 {
-                    return Some(new_state);
-                }
 
-                // Check if we have seen the new state before, if so, discard it.
-                if self.seen.contains(&new_state) {
-                    continue;
+        let current = self.queue.pop_front().unwrap();
+
+        // First try the previous snek so that the final sequence of moves alternates between the
+        // sneks less, if possible.
+        let snek_idx_iter = 0..current.sneks.len();
+        let sneks_to_try: Vec<usize> = if let Some(&(last_idx, _)) = current.moves.last() {
+            once(last_idx)
+                .chain(snek_idx_iter.filter(|x| *x != last_idx))
+                .collect()
+        } else {
+            snek_idx_iter.collect()
+        };
+
+        // for each snek, try all possible directions:
+        for snek_idx in sneks_to_try.into_iter() {
+            if current.sneks[snek_idx].is_empty() {
+                continue;
+            }
+            for dir in dirs_to_try.iter() {
+                // println!(
+                //     "{} trying state {} {:?}",
+                //     current.format_moves(),
+                //     snek_idx,
+                //     dir
+                // );
+
+                if let Some(new_state) = current.do_move(snek_idx, *dir) {
+                    // If the new state results in victory, return it immediately.
+                    if new_state.snek_count == 0 {
+                        return Some(new_state);
+                    }
+
+                    // Check if we have seen the new state before, if so, discard it.
+                    if self.seen.contains(&new_state) {
+                        continue;
+                    }
+                    // println!(
+                    //     "  {} added state {} {:?}",
+                    //     current.format_moves(),
+                    //     snek_idx,
+                    //     dir
+                    // );
+                    self.seen.insert(new_state.clone());
+                    self.queue.push_back(new_state);
                 }
-                self.seen.insert(new_state.clone());
-                self.queue.push_back(new_state);
             }
         }
         // Did not get to victory yet.
@@ -442,7 +699,7 @@ impl SearchState {
 /// Loads a level from given path, tries to solve it, and if successful, returns the winning moves.
 pub fn solve(file: &Path) -> Option<String> {
     let mut s = SearchState::load_level(file);
-    // println!("initial state:\n{}", &s.queue.front().unwrap());
+    println!("initial state:\n{}", &s.queue.front().unwrap());
 
     if let Some(winning_state) = s.run() {
         // println!("winning moves: {}", winning_state.format_moves());
