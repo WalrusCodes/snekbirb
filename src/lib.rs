@@ -29,10 +29,10 @@ enum Tile {
     // A segment of the snek, where 0 is head, and rest of the segments are incrementally higher
     // numbers. A gap in numbers denotes start of a different snek. We only use RawSnek when
     // loading the level.
-    RawSnek(usize),
+    RawSnek(u8),
     // A segment of the snek. The number describes which Snek it is (0: first snek, 1: second
     // snek, etc.).
-    SomeSnek(usize),
+    SomeSnek(u8),
 }
 
 #[allow(dead_code)]
@@ -53,10 +53,10 @@ enum PushResult {
 
 /// Position in the grid (row, col).
 #[derive(Debug, Clone, PartialEq, Copy, Hash)]
-struct Pos(usize, usize);
+struct Pos(u8, u8);
 
 impl Pos {
-    fn apply(&self, dir: &Direction) -> Pos {
+    fn apply(&self, dir: Direction) -> Pos {
         let x = match dir {
             Direction::Left => (self.0, self.1 - 1),
             Direction::Right => (self.0, self.1 + 1),
@@ -67,7 +67,7 @@ impl Pos {
     }
 
     /// Checks if given direction can be applied without going out of bounds.
-    fn can_apply(&self, dir: &Direction, rows: usize, cols: usize) -> bool {
+    fn can_apply(&self, dir: Direction, rows: u8, cols: u8) -> bool {
         match dir {
             Direction::Left => self.1 != 0,
             Direction::Right => self.1 < (cols - 1),
@@ -76,7 +76,7 @@ impl Pos {
         }
     }
 
-    fn maybe_apply(&self, dir: &Direction, rows: usize, cols: usize) -> Option<Pos> {
+    fn maybe_apply(&self, dir: Direction, rows: u8, cols: u8) -> Option<Pos> {
         if self.can_apply(dir, rows, cols) {
             Some(self.apply(dir))
         } else {
@@ -86,12 +86,18 @@ impl Pos {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-struct Move(usize, Direction);
+struct Move(u8, Direction);
 type Moves = Vec<Move>;
 
 #[derive(Debug, Clone)]
 struct State {
-    rows: Vec<Vec<Tile>>,
+    // Number of columns in the grid.
+    col_count: usize,
+    // Number of rows in the grid.
+    row_count: usize,
+
+    // Tiles, a multiple of col_size.
+    grid: Vec<Tile>,
     // Location of the exit tile.
     exit_pos: Pos,
     // For convenience, the number of fruit left on the grid.
@@ -107,15 +113,13 @@ struct State {
 
 impl PartialEq for State {
     fn eq(&self, other: &Self) -> bool {
-        self.rows == other.rows && self.sneks == other.sneks
+        self.grid == other.grid && self.sneks == other.sneks
     }
 }
 
 impl Hash for State {
     fn hash<H: std::hash::Hasher>(&self, hasher: &mut H) {
-        for row in self.rows.iter() {
-            Hash::hash_slice(row, hasher);
-        }
+        Hash::hash_slice(&self.grid, hasher);
         for snek in self.sneks.iter() {
             Hash::hash_slice(snek, hasher);
         }
@@ -131,10 +135,12 @@ impl State {
         F: Fn(&Tile) -> bool,
     {
         let mut out = Vec::new();
-        for (row_idx, row) in self.rows.iter().enumerate() {
-            for (col_idx, tile) in row.iter().enumerate() {
-                if fun(tile) {
-                    out.push(Pos(row_idx, col_idx));
+        for row_idx in 0..self.row_count {
+            for col_idx in 0..self.col_count {
+                let pos = Pos(row_idx as u8, col_idx as u8);
+                let tile = self.get(pos);
+                if fun(&tile) {
+                    out.push(pos);
                 }
             }
         }
@@ -148,24 +154,27 @@ impl State {
 
     /// Takes in all lines, parses them, builds state.
     fn parse(text: &str) -> State {
-        let rows = text
+        let data: Vec<Vec<Tile>> = text
             .lines()
             .filter(|line| !(line.is_empty() || line.starts_with("//")))
             .map(State::parse_row)
             .collect();
         let mut tmp = State {
-            rows,
+            row_count: data.len(),
+            col_count: data[0].len(),
+            grid: data.into_iter().flatten().collect(),
             exit_pos: Pos(0, 0), // placeholder
-            sneks: Vec::new(),
-            fruit_count: 0, // placeholder
-            snek_count: 0,  // placeholder
+            sneks: Vec::new(),   // placeholder
+            fruit_count: 0,      // placeholder
+            snek_count: 0,       // placeholder
             moves: Vec::new(),
         };
+        tmp.grid.shrink_to_fit();
         let sneks = tmp.find_sneks();
         // Replace RawSneks with SomeSneks which describe just which snek it is.
         for (idx, segments) in sneks.iter().enumerate() {
             for pos in segments.iter() {
-                tmp.set(pos, &Tile::SomeSnek(idx));
+                tmp.set(*pos, Tile::SomeSnek(idx as u8));
             }
         }
         tmp.sneks = sneks;
@@ -175,12 +184,12 @@ impl State {
         let mut exit_tiles = tmp.find_tiles(&Tile::Exit);
         assert_eq!(exit_tiles.len(), 1);
         tmp.exit_pos = exit_tiles.pop().unwrap();
-        tmp.set(&tmp.exit_pos.clone(), &Tile::Empty);
+        tmp.set(tmp.exit_pos, Tile::Empty);
         tmp
     }
 
-    fn from_base36(c: char) -> usize {
-        c.to_digit(36).unwrap() as usize
+    fn from_base36(c: char) -> u8 {
+        c.to_digit(36).unwrap() as u8
     }
 
     /// Parses a single line of level input, returns a row of tiles.
@@ -200,8 +209,8 @@ impl State {
             .collect()
     }
 
-    fn format_tile(&self, pos: &Pos) -> char {
-        if *pos == self.exit_pos {
+    fn format_tile(&self, pos: Pos) -> char {
+        if pos == self.exit_pos {
             return 'E';
         }
         let tile = self.get(pos);
@@ -216,21 +225,27 @@ impl State {
         }
     }
 
-    fn format_row(&self, row_idx: usize) -> String {
-        (0..self.rows[0].len())
-            .map(|col_idx| self.format_tile(&Pos(row_idx, col_idx)))
+    //
+    fn format_row(&self, row_idx: u8) -> String {
+        (0..self.col_count)
+            .map(|col_idx| self.format_tile(Pos(row_idx, col_idx as u8)))
             .chain(std::iter::once('\n'))
             .collect()
     }
 
+    fn grid_idx(&self, pos: Pos) -> usize {
+        (pos.0 as usize) * self.col_count + (pos.1 as usize)
+    }
+
     /// Returns the tile in given position.
-    fn get(&self, pos: &Pos) -> Tile {
-        self.rows[pos.0][pos.1].clone()
+    fn get(&self, pos: Pos) -> Tile {
+        self.grid[self.grid_idx(pos)].clone()
     }
 
     /// Sets the tile in given position.
-    fn set(&mut self, pos: &Pos, tile: &Tile) {
-        self.rows[pos.0][pos.1] = tile.clone();
+    fn set(&mut self, pos: Pos, tile: Tile) {
+        let idx = self.grid_idx(pos);
+        self.grid[idx] = tile;
     }
 
     /// Finds positions of all snek segments.
@@ -244,15 +259,15 @@ impl State {
         let snek_poses = self.find_tiles_by_predicate(|t| matches!(t, Tile::RawSnek(_)));
 
         // A mapping of all snek indices to their positions.
-        let mut snek_indices: HashMap<usize, Pos> = HashMap::new();
+        let mut snek_indices: HashMap<u8, Pos> = HashMap::new();
         for pos in snek_poses.iter() {
-            if let Tile::RawSnek(idx) = self.get(pos) {
+            if let Tile::RawSnek(idx) = self.get(*pos) {
                 assert!(snek_indices.insert(idx, pos.clone()).is_none());
             }
         }
 
         // Sort the indices. After this, we have a vector that looks like this: [0, 1, 2, 4, 5, 6].
-        let mut sorted_snek_indices: Vec<usize> = snek_indices.keys().cloned().collect();
+        let mut sorted_snek_indices: Vec<u8> = snek_indices.keys().cloned().collect();
         sorted_snek_indices.sort();
 
         // Walk through the vector, split into ranges based on gaps.
@@ -279,8 +294,8 @@ impl State {
     /// Removes given snek from the state, decrements snek_count.
     fn remove_snek(&mut self, snek_idx: u8) {
         let snek_poses = self.sneks[snek_idx as usize].clone();
-        for pos in snek_poses.iter() {
-            self.set(&pos, &Tile::Empty);
+        for pos in snek_poses.into_iter() {
+            self.set(pos, Tile::Empty);
         }
         self.sneks[snek_idx as usize].clear();
         self.snek_count -= 1;
@@ -298,8 +313,8 @@ impl State {
                 if self.sneks[idx].is_empty() {
                     continue;
                 }
-                let pos = self.sneks[idx].first().unwrap().clone();
-                match self.push(None, &pos, Direction::Down) {
+                let pos = *self.sneks[idx].first().unwrap();
+                match self.push(None, pos, Direction::Down) {
                     PushResult::Moved => {
                         again = true;
                     }
@@ -348,11 +363,11 @@ impl State {
     }
 
     /// Applies direction to given position if able, based on level boundaries.
-    fn maybe_apply_pos(&self, pos: &Pos, dir: Direction) -> Option<Pos> {
-        return pos.maybe_apply(&dir, self.rows.len(), self.rows.first().unwrap().len());
+    fn maybe_apply_pos(&self, pos: Pos, dir: Direction) -> Option<Pos> {
+        pos.maybe_apply(dir, self.row_count as u8, self.col_count as u8)
     }
 
-    fn get_object_id(tile: &Tile) -> usize {
+    fn get_object_id(tile: &Tile) -> u8 {
         match tile {
             Tile::SomeSnek(idx) => *idx,
             _ => panic!("not the right tile: {:?}", tile),
@@ -364,16 +379,11 @@ impl State {
     ///
     /// If maybe_snek_idx is passed in, that's the snek that's causing the pushing and cannot be
     /// moved.
-    fn push(
-        &mut self,
-        maybe_snek_idx: Option<usize>,
-        tile_pos: &Pos,
-        dir: Direction,
-    ) -> PushResult {
+    fn push(&mut self, maybe_snek_idx: Option<u8>, tile_pos: Pos, dir: Direction) -> PushResult {
         // Objects that are already moving.
-        let mut moving: HashSet<usize> = HashSet::new();
+        let mut moving: HashSet<u8> = HashSet::new();
         // Objects that we need to test.
-        let mut queue: VecDeque<usize> = VecDeque::new();
+        let mut queue: VecDeque<u8> = VecDeque::new();
 
         let obj_idx = State::get_object_id(&self.get(tile_pos));
         queue.push_back(obj_idx);
@@ -384,9 +394,9 @@ impl State {
             let mut has_solid_rest = false;
             let mut has_spike = false;
             let mut has_out_of_bounds = false;
-            for pos in self.sneks[idx].iter() {
-                if let Some(new_pos) = self.maybe_apply_pos(pos, dir) {
-                    match self.get(&new_pos) {
+            for pos in self.sneks[idx as usize].iter() {
+                if let Some(new_pos) = self.maybe_apply_pos(*pos, dir) {
+                    match self.get(new_pos) {
                         Tile::Empty => (),
                         Tile::Spike => {
                             has_spike = true;
@@ -425,30 +435,30 @@ impl State {
         // dbg!("moving: ", &moving);
         // println!("{}", &self);
 
-        let mut new_rows = self.rows.clone();
+        let mut new_grid = self.grid.clone();
         let mut new_sneks = self.sneks.clone();
         // Clear out the objects being moved.
         for obj_idx in moving.iter() {
-            for pos in self.sneks[*obj_idx].iter() {
-                new_rows[pos.0][pos.1] = Tile::Empty;
+            for pos in self.sneks[*obj_idx as usize].iter() {
+                new_grid[self.grid_idx(*pos)] = Tile::Empty;
             }
         }
         // Now reapply with the movement.
         for obj_idx in moving.iter() {
-            new_sneks[*obj_idx].clear();
-            for pos in self.sneks[*obj_idx].iter() {
-                let new_pos = pos.apply(&dir);
-                new_rows[new_pos.0][new_pos.1] = self.rows[pos.0][pos.1].clone();
-                new_sneks[*obj_idx].push(new_pos);
+            new_sneks[*obj_idx as usize].clear();
+            for pos in self.sneks[*obj_idx as usize].iter() {
+                let new_pos = pos.apply(dir);
+                new_grid[self.grid_idx(new_pos)] = self.grid[self.grid_idx(*pos)].clone();
+                new_sneks[*obj_idx as usize].push(new_pos);
             }
         }
-        self.rows = new_rows;
+        self.grid = new_grid;
         self.sneks = new_sneks;
 
         // Check if any snek moved into exit.
         if self.fruit_count == 0 {
             for obj_idx in moving.iter() {
-                if let Some(snek_head) = self.sneks[*obj_idx].first() {
+                if let Some(snek_head) = self.sneks[*obj_idx as usize].first() {
                     if *snek_head == self.exit_pos {
                         self.remove_snek(*obj_idx);
                     }
@@ -463,18 +473,18 @@ impl State {
     }
 
     /// Takes some state, applies one movement for one snek, builds new state.
-    fn do_move(&self, snek_idx: usize, dir: Direction) -> Option<State> {
-        let snek = &self.sneks[snek_idx];
+    fn do_move(&self, snek_idx: u8, dir: Direction) -> Option<State> {
+        let snek = &self.sneks[snek_idx as usize];
         let head = snek[0].clone();
 
         // step 1: check if new tile is free or exit
 
         // check if direction is valid based on current position and level boundaries
-        let new_tile_pos = match self.maybe_apply_pos(&head, dir) {
+        let new_tile_pos = match self.maybe_apply_pos(head, dir) {
             Some(pos) => pos,
             None => return None,
         };
-        let new_tile = self.get(&new_tile_pos);
+        let new_tile = self.get(new_tile_pos);
 
         let mut state = self.clone();
         state.moves.push(Move(snek_idx, dir));
@@ -488,8 +498,8 @@ impl State {
             }
             Tile::Fruit => {
                 // fruit om nom nom nom
-                state.set(&new_tile_pos, &Tile::SomeSnek(snek_idx));
-                state.sneks[snek_idx].insert(0, new_tile_pos);
+                state.set(new_tile_pos, Tile::SomeSnek(snek_idx));
+                state.sneks[snek_idx as usize].insert(0, new_tile_pos);
                 state.fruit_count -= 1;
             }
             Tile::Exit | Tile::RawSnek(_) => {
@@ -498,7 +508,7 @@ impl State {
             Tile::Empty | Tile::SomeSnek(_) => {
                 // If we stepping on SomeSnek, it means we are pushing. See if we can push.
                 if let Tile::SomeSnek(_) = new_tile {
-                    if state.push(Some(snek_idx), &new_tile_pos, dir) != PushResult::Moved {
+                    if state.push(Some(snek_idx), new_tile_pos, dir) != PushResult::Moved {
                         return None;
                     }
                 }
@@ -508,12 +518,12 @@ impl State {
                     state.remove_snek(snek_idx);
                 } else {
                     // Insert the new head, remove last segment.
-                    let new_snek = &mut state.sneks[snek_idx];
+                    let new_snek = &mut state.sneks[snek_idx as usize];
                     new_snek.insert(0, new_tile_pos); // note: inefficient!
                     new_snek.pop();
                     // Set last segment to empty.
-                    state.set(&new_tile_pos, &Tile::SomeSnek(snek_idx));
-                    state.set(&snek.last().unwrap(), &Tile::Empty);
+                    state.set(new_tile_pos, Tile::SomeSnek(snek_idx));
+                    state.set(*snek.last().unwrap(), Tile::Empty);
                 }
             }
         };
@@ -532,10 +542,10 @@ impl State {
     /// Formats the moves that we took as a string.
     fn format_moves(&self) -> String {
         let mut out: Vec<char> = Vec::new();
-        let mut prev_snek_idx = 999;
+        let mut prev_snek_idx = 255;
         for Move(snek_idx, dir) in self.moves.iter() {
             if *snek_idx != prev_snek_idx {
-                if prev_snek_idx != 999 {
+                if prev_snek_idx != 255 {
                     out.push(' ');
                 }
                 out.push(std::char::from_digit(*snek_idx as u32, 10).unwrap());
@@ -560,8 +570,8 @@ impl std::fmt::Display for State {
             "sneks: {} froot count: {} exit: {:?}\n",
             self.snek_count, self.fruit_count, self.exit_pos
         )?;
-        for row_idx in 0..self.rows.len() {
-            f.write_str(&self.format_row(row_idx))?;
+        for row_idx in 0..self.row_count {
+            f.write_str(&self.format_row(row_idx as u8))?;
         }
         Ok(())
     }
@@ -572,8 +582,6 @@ struct SearchState {
     queue: VecDeque<State>,
     /// States that we have seen.
     seen: HashSet<State>,
-    /// Mapping from moves to state.
-    moves: HashMap<Moves, State>,
 }
 
 impl SearchState {
@@ -585,11 +593,7 @@ impl SearchState {
         queue.push_back(state.clone());
         let mut seen = HashSet::new();
         seen.insert(state);
-        SearchState {
-            queue,
-            seen,
-            moves: HashMap::new(),
-        }
+        SearchState { queue, seen }
     }
 
     /// Pulls the front state off of the queue, tries out all possible movements, pushes new viable
@@ -608,8 +612,8 @@ impl SearchState {
 
         // First try the previous snek so that the final sequence of moves alternates between the
         // sneks less, if possible.
-        let snek_idx_iter = 0..current.sneks.len();
-        let sneks_to_try: Vec<usize> = if let Some(&Move(last_idx, _)) = current.moves.last() {
+        let snek_idx_iter = 0..(current.sneks.len() as u8);
+        let sneks_to_try: Vec<u8> = if let Some(&Move(last_idx, _)) = current.moves.last() {
             once(last_idx)
                 .chain(snek_idx_iter.filter(|x| *x != last_idx))
                 .collect()
@@ -619,7 +623,7 @@ impl SearchState {
 
         // for each snek, try all possible directions:
         for snek_idx in sneks_to_try.into_iter() {
-            if current.sneks[snek_idx].is_empty() {
+            if current.sneks[snek_idx as usize].is_empty() {
                 continue;
             }
             for dir in dirs_to_try.iter() {
@@ -646,8 +650,8 @@ impl SearchState {
                     //     snek_idx,
                     //     dir
                     // );
-                    self.moves
-                        .insert(new_state.moves.clone(), new_state.clone());
+                    // self.moves
+                    //     .insert(new_state.moves.clone(), new_state.clone());
                     self.seen.insert(new_state.clone());
                     self.queue.push_back(new_state);
                 }
@@ -660,7 +664,7 @@ impl SearchState {
     /// Keeps processing items from the queue until victory or out of new states.
     fn run(&mut self) -> Option<State> {
         while !self.queue.is_empty() {
-            if self.queue.len() > 100_000 {
+            if self.queue.len() > 500_000 {
                 panic!("too many states in queue");
             }
 
@@ -672,19 +676,6 @@ impl SearchState {
         }
         None
     }
-
-    fn show_sequence(&self, moves: &Moves) {
-        for m in 1..moves.len() {
-            let moves: Moves = moves[0..m].iter().cloned().collect();
-            // println!("moves: {:?}", &moves);
-            println!(
-                "{:?}{:?}, {}",
-                moves.last().unwrap().0,
-                moves.last().unwrap().1,
-                self.moves.get(&moves).unwrap()
-            );
-        }
-    }
 }
 
 /// Loads a level from given path, tries to solve it, and if successful, returns the winning moves.
@@ -695,20 +686,13 @@ pub fn solve(file: &Path) -> Option<String> {
 
     let result = s.run();
 
-    // println!("total moves considered: {}", s.moves.len());
+    println!("total states: {}", s.seen.len());
     println!(
         "ending memory usage: {} max: {}",
         ALLOCATOR.get_current(),
         ALLOCATOR.get_max()
     );
     if let Some(winning_state) = result {
-        /*
-        for m in 1..winning_state.moves.len() {
-            let moves: Moves = winning_state.moves[0..m].iter().cloned().collect();
-            // println!("moves: {:?}", &moves);
-            println!("{}", s.moves.get(&moves).unwrap());
-        }
-        */
         Some(winning_state.format_moves())
     } else {
         None
