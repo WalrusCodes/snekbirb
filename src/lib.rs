@@ -420,6 +420,7 @@ impl State {
             let idx = queue.pop_front().unwrap();
             let mut has_solid_rest = false;
             let mut has_spike = false;
+            let mut has_out_of_bounds = false;
             for pos in self.sneks[idx].iter() {
                 if let Some(new_pos) = self.maybe_apply_pos(pos, dir) {
                     match self.get(&new_pos) {
@@ -445,12 +446,12 @@ impl State {
                     }
                 } else {
                     // out of bounds
-                    return PushResult::WouldDie;
+                    has_out_of_bounds = true;
                 }
             }
             if has_solid_rest {
                 return PushResult::DidNotMove;
-            } else if has_spike {
+            } else if has_spike || has_out_of_bounds {
                 return PushResult::WouldDie;
             }
         }
@@ -708,6 +709,19 @@ impl SearchState {
         }
         None
     }
+
+    fn show_sequence(&self, moves: &Moves) {
+        for m in 1..moves.len() {
+            let moves: Moves = moves[0..m].iter().cloned().collect();
+            // println!("moves: {:?}", &moves);
+            println!(
+                "{:?}{:?}, {}",
+                moves.last().unwrap().0,
+                moves.last().unwrap().1,
+                self.moves.get(&moves).unwrap()
+            );
+        }
+    }
 }
 
 /// Loads a level from given path, tries to solve it, and if successful, returns the winning moves.
@@ -724,6 +738,7 @@ pub fn solve(file: &Path) -> Option<String> {
         // println!("winning moves: {}", winning_state.format_moves());
         Some(winning_state.format_moves())
     } else {
+        println!("{} moves considered", s.moves.len());
         None
     }
 }
