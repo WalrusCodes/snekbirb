@@ -89,6 +89,31 @@ impl Pos {
 struct Move(u8, Direction);
 type Moves = Vec<Move>;
 
+/// Parses a string into a vector of moves.
+///
+/// Input format matches what we output for solutions, i.e.,
+/// "<snake num>:<one or more directions> [...]".
+fn parse_moves(s: &str) -> Moves {
+    let mut snek_idx = 255u8;
+    let mut out = Moves::new();
+    for ch in s.chars() {
+        match ch {
+            '0'..='9' => {
+                snek_idx = ch.to_digit(10).unwrap() as u8;
+            }
+            'U' => out.push(Move(snek_idx, Direction::Up)),
+            'D' => out.push(Move(snek_idx, Direction::Down)),
+            'L' => out.push(Move(snek_idx, Direction::Left)),
+            'R' => out.push(Move(snek_idx, Direction::Right)),
+            ' ' | ':' => {}
+            _ => {
+                panic!("invalid char: {}", ch);
+            }
+        }
+    }
+    out
+}
+
 #[derive(Debug, Clone)]
 struct State {
     // Number of columns in the grid.
@@ -129,6 +154,11 @@ impl Hash for State {
 impl Eq for State {}
 
 impl State {
+    fn from_file(file: &Path) -> State {
+        let lines = std::fs::read_to_string(file).unwrap();
+        State::parse(&lines)
+    }
+
     /// Finds all tiles that match given predicatve.
     fn find_tiles_by_predicate<F>(&self, fun: F) -> Vec<Pos>
     where
@@ -355,20 +385,18 @@ impl State {
         queue.push_back(obj_idx);
         moving.insert(obj_idx);
 
+        let mut has_spike_or_out_of_bounds = false;
         while !queue.is_empty() {
             let idx = queue.pop_front().unwrap();
-            let mut has_solid_rest = false;
-            let mut has_spike = false;
-            let mut has_out_of_bounds = false;
             for pos in self.sneks[idx as usize].iter() {
                 if let Some(new_pos) = self.maybe_apply_pos(*pos, dir) {
                     match self.get(new_pos) {
                         Tile::Empty => (),
                         Tile::Spike => {
-                            has_spike = true;
+                            has_spike_or_out_of_bounds = true;
                         }
                         Tile::Fruit | Tile::Ground => {
-                            has_solid_rest = true;
+                            return PushResult::DidNotMove;
                         }
                         Tile::SomeSnek(other_idx) => {
                             if maybe_snek_idx.is_some() && maybe_snek_idx.unwrap() == other_idx {
@@ -384,15 +412,12 @@ impl State {
                         Tile::Exit | Tile::RawSnek(_) => panic!("shouldn't be seeing these"),
                     }
                 } else {
-                    // out of bounds
-                    has_out_of_bounds = true;
+                    has_spike_or_out_of_bounds = true;
                 }
             }
-            if has_solid_rest {
-                return PushResult::DidNotMove;
-            } else if has_spike || has_out_of_bounds {
-                return PushResult::WouldDie;
-            }
+        }
+        if has_spike_or_out_of_bounds {
+            return PushResult::WouldDie;
         }
 
         // If we are here, it means the original object that was being pushed can move, possibly
@@ -553,8 +578,7 @@ struct SearchState {
 impl SearchState {
     /// Parses the level file, creates initial queue of the first state.
     fn load_level(file: &Path) -> SearchState {
-        let lines = std::fs::read_to_string(file).unwrap();
-        let state = State::parse(&lines);
+        let state = State::from_file(file);
         let mut queue = VecDeque::new();
         queue.push_back(state.clone());
         let mut seen = HashSet::new();
@@ -628,7 +652,7 @@ impl SearchState {
     /// Keeps processing items from the queue until victory or out of new states.
     fn run(&mut self) -> Option<State> {
         while !self.queue.is_empty() {
-            if self.queue.len() > 500_000 {
+            if self.queue.len() > 1_500_000 {
                 panic!("too many states in queue");
             }
 
@@ -660,5 +684,24 @@ pub fn solve(file: &Path) -> Option<String> {
         Some(winning_state.format_moves())
     } else {
         None
+    }
+}
+
+/// Loads a level from given path, then applies given moves.
+pub fn apply_moves(file: &Path, moves: &str) {
+    let mut state = State::from_file(file);
+    let moves = parse_moves(moves);
+    let mut out = Vec::new();
+    out.push(state.clone());
+
+    for m in moves.iter() {
+        if let Some(new_state) = state.do_move(m.0, m.1) {
+            println!("move {:?}:", m);
+            println!("{}", &new_state);
+            state = new_state;
+            out.push(state.clone());
+        } else {
+            panic!("failed at move {:?}", m);
+        }
     }
 }
