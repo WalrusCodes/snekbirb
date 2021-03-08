@@ -464,6 +464,13 @@ impl Grid {
             .chain(std::iter::once('\n'))
             .collect()
     }
+
+    pub fn format_grid(&self) -> String {
+        (0..self.row_count).map(|row_idx|
+            self.format_row(row_idx as u8)).collect()
+    }
+
+
 }
 
 impl PartialEq for Grid {
@@ -480,19 +487,5 @@ impl Hash for Grid {
         for obj in self.objects.iter() {
             Hash::hash_slice(obj, hasher);
         }
-    }
-}
-
-impl std::fmt::Display for Grid {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "sneks: {} froot count: {} exit: {:?}\n",
-            self.snek_count, self.fruit_count, self.exit_pos
-        )?;
-        for row_idx in 0..self.row_count {
-            f.write_str(&self.format_row(row_idx as u8))?;
-        }
-        Ok(())
     }
 }

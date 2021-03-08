@@ -146,7 +146,10 @@ pub fn solve(file: &Path) -> Option<String> {
         "memory usage after initial state load: {}",
         ALLOCATOR.get_current()
     );
-    println!("initial state:\n{}", &s.queue.front().unwrap().grid);
+    println!(
+        "initial state:\n{}",
+        &s.queue.front().unwrap().grid.format_grid()
+    );
 
     let result = s.run();
 
@@ -163,19 +166,23 @@ pub fn solve(file: &Path) -> Option<String> {
     }
 }
 
-/// Loads a level from given path, then applies given moves.
-pub fn apply_moves(file: &Path, moves: &str) {
+/// Loads a level from given path, then applies given moves, returning a vector of formatted
+/// moves and states.
+pub fn apply_moves(file: &Path, moves: &str) -> Vec<(String, String)> {
     let state = State::from_file(file);
     let moves = Moves::parse(moves);
     let mut grid = state.grid.clone();
+    let mut out = Vec::new();
 
     for m in moves {
         if let Some(new_grid) = grid.do_move(m) {
-            println!("move {:?}:", m);
-            println!("{}", &new_grid);
+            // println!("{:?}:", m);
+            // println!("{}", new_grid.format_grid());
+            out.push((format!("{:?}", m), new_grid.format_grid()));
             grid = new_grid;
         } else {
             panic!("failed at move {:?}", m);
         }
     }
+    out
 }
