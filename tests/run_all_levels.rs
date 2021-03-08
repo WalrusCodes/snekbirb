@@ -11,7 +11,7 @@ fn is_level_file(entry: &DirEntry) -> bool {
 /// solution.
 #[test]
 fn run_all_levels() {
-    let walker = WalkDir::new("levels/").into_iter();
+    let walker = WalkDir::new("examples/").into_iter();
     for entry in walker {
         let entry = entry.unwrap();
         if !is_level_file(&entry) {

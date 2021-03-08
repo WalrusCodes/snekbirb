@@ -1,0 +1,28 @@
+.......E.
+..10#....
+.#######.
+
+// * Levels are ASCII files.
+//
+// * Comments start with // and are ignored.
+//
+// * The grid is described by a rectangular block of
+//   ASCII characters, one character per tile.
+//
+// * Supported tiles are as follows:
+//         . : empty spaces
+//         E : exit
+//         F : exit
+//         # : ground
+//         * : spiky boi
+//    0-9a-z : snek segment (in base36, see below)
+//       U-Z : block segment
+//
+// * Sneks are described by continuous numbers in base 36 (0-9, followed by
+//   lowercase a-z). The smallest number in this range is the snek head. To
+//   specify multiple sneks, create a gap in the numbering, e.g.: 012 45.
+//
+// * Blocks (including disjoint movable thingamabobs) are described by letters
+//   in U-Z range. Same letter means it is part of same block. E.g, U...U describes
+//   a handle thing that can be passed through, but still the two Us are
+//   magically connected in the background.
