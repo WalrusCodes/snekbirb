@@ -1,6 +1,7 @@
 use std::{
     collections::{HashSet, VecDeque},
     path::Path,
+    time::{Duration, Instant},
 };
 
 mod alloc;
@@ -123,9 +124,20 @@ impl SearchState {
 
     /// Keeps processing items from the queue until victory or out of new states.
     fn run(&mut self) -> Option<State> {
+        let mut next_print = Instant::now();
         while !self.queue.is_empty() {
-            if self.queue.len() > 1_500_000 {
+            if self.queue.len() > 10_000_000 {
                 panic!("too many states in queue");
+            }
+            if Instant::now() > next_print {
+                println!(
+                    "in queue: {} seen: {} mem usage current: {} max: {}",
+                    self.queue.len(),
+                    self.seen.len(),
+                    ALLOCATOR.get_current(),
+                    ALLOCATOR.get_max()
+                );
+                next_print = Instant::now() + Duration::from_secs(2);
             }
 
             if let Some(winning_state) = self.process_one_state() {
