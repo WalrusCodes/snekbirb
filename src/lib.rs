@@ -68,7 +68,7 @@ impl SearchState {
 
         // First try the previous snek so that the final sequence of moves alternates between the
         // sneks less, if possible.
-        let snek_idx_iter = 0..(current.grid.first_block_idx as u8);
+        let snek_idx_iter = 0..current.grid.snek_count();
         let sneks_to_try: Vec<u8> = if let Some(Move(last_idx, _)) = current.moves.last() {
             std::iter::once(last_idx)
                 .chain(snek_idx_iter.filter(|x| *x != last_idx))

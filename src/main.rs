@@ -19,7 +19,7 @@ fn main() {
     } else {
         let moves = &args[2];
         let results = snekbirb::apply_moves(path, moves);
-        let animate = args[3] == "--animate";
+        let animate = args.len() > 3 && args[3] == "--animate";
         for (mv, grid) in results {
             if animate {
                 // clear screen, move to "home" position

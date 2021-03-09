@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     hash::Hash,
+    rc::Rc,
 };
 
 use super::{Direction, Move, Pos};
@@ -122,16 +123,30 @@ fn find_snek_positions(chars: &[Vec<char>]) -> Vec<Vec<Pos>> {
     out
 }
 
-#[derive(Debug, Clone)]
-pub struct Grid {
-    tiles: Vec<Tile>, // len = col_count * row_count
+/// Data that doesn't change after the level is loaded. We share one instance of this between Grid
+/// entries.
+#[derive(Debug)]
+struct StaticData {
     col_count: usize,
     row_count: usize,
 
+    // Position of the exit tile.
     exit_pos: Pos,
-    pub objects: Vec<Vec<Pos>>,
+
+    // Mapping from teleport position to the other side.
+    teleports: HashMap<Pos, Pos>,
+
     // Position that the first block appears in "objects", same as starting "snek_count".
-    pub first_block_idx: usize,
+    first_block_idx: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct Grid {
+    tiles: Vec<Tile>, // len = col_count * row_count
+    // Data that doesn't change as grid changes, so we just keep a pointer to it.
+    s: Rc<StaticData>,
+    // Positions of sneks (with indices 0..first_block_idx, and blocks from first_block_idx..).
+    pub objects: Vec<Vec<Pos>>,
     fruit_count: usize,
     pub snek_count: usize,
 }
@@ -148,6 +163,10 @@ impl Grid {
         let col_count = chars[0].len();
         let mut fruit_count = 0;
         let mut exit_pos: Option<Pos> = None;
+        let mut teleports = HashMap::new();
+
+        // Temporary structure for tracking teleport positions as we construct them.
+        let mut teleport_char_to_pos: HashMap<char, Pos> = HashMap::new();
 
         // Then, build a list of snek positions. The index of each lists will be the object id. We will
         // add block objects to this list later.
@@ -169,6 +188,7 @@ impl Grid {
 
         for (row_idx, row) in chars.iter().enumerate() {
             for (col_idx, c) in row.iter().enumerate() {
+                let pos = Pos(row_idx as u8, col_idx as u8);
                 let tile = match c {
                     '0'..='9' | 'a'..='z' => {
                         // Skip the sneks, we already assigned them separately.
@@ -180,7 +200,7 @@ impl Grid {
                             objects.push(Vec::new());
                         }
                         let block_idx = *block_indices.get(c).unwrap();
-                        objects[block_idx].push(Pos(row_idx as u8, col_idx as u8));
+                        objects[block_idx].push(pos);
                         Tile::Block(block_idx as u8)
                     }
                     '.' => Tile::Empty,
@@ -195,6 +215,15 @@ impl Grid {
                         exit_pos = Some(Pos(row_idx as u8, col_idx as u8));
                         Tile::Empty
                     }
+                    '@' => {
+                        if let Some(pos2) = teleport_char_to_pos.remove(c) {
+                            teleports.insert(pos, pos2);
+                            teleports.insert(pos2, pos);
+                        } else {
+                            teleport_char_to_pos.insert(*c, pos);
+                        }
+                        Tile::Empty
+                    }
                     _ => {
                         panic!("invalid input character: {}", c);
                     }
@@ -203,20 +232,27 @@ impl Grid {
             }
         }
 
+        if !teleport_char_to_pos.is_empty() {
+            panic!("only one half of teleport found");
+        }
+
         Grid {
             tiles,
-            col_count,
-            row_count,
-            exit_pos: exit_pos.expect("no exit"),
+            s: Rc::new(StaticData {
+                col_count,
+                row_count,
+                exit_pos: exit_pos.expect("no exit"),
+                teleports,
+                first_block_idx,
+            }),
             objects,
-            first_block_idx,
             fruit_count,
             snek_count,
         }
     }
 
     fn grid_idx(&self, pos: Pos) -> usize {
-        (pos.0 as usize) * self.col_count + (pos.1 as usize)
+        (pos.0 as usize) * self.s.col_count + (pos.1 as usize)
     }
 
     /// Returns the tile in given position.
@@ -232,7 +268,7 @@ impl Grid {
 
     /// Applies direction to given position if able, based on level boundaries.
     fn maybe_apply_pos(&self, pos: Pos, dir: Direction) -> Option<Pos> {
-        pos.maybe_apply(dir, self.row_count as u8, self.col_count as u8)
+        pos.maybe_apply(dir, self.s.row_count as u8, self.s.col_count as u8)
     }
 
     /// Removes given snek from the state, decrements snek_count.
@@ -274,7 +310,7 @@ impl Grid {
                     match self.get(new_pos) {
                         Tile::Empty => (),
                         Tile::Spike => {
-                            if idx < (self.first_block_idx as u8) {
+                            if idx < (self.s.first_block_idx as u8) {
                                 // sneks can get poked
                                 has_spike_or_out_of_bounds = true;
                             } else {
@@ -329,15 +365,33 @@ impl Grid {
                 new_objects[*obj_idx as usize].push(new_pos);
             }
         }
+
+        let mut maybe_teleport: Vec<Pos> = Vec::new();
+        for (&tlp_pos, _) in self.s.teleports.iter() {
+            let tile = &new_tiles[self.grid_idx(tlp_pos)];
+            match tile {
+                Tile::Snek(_) | Tile::Block(_) => {
+                    if self.get(tlp_pos) != *tile {
+                        maybe_teleport.push(tlp_pos);
+                    }
+                }
+                _ => {}
+            }
+        }
+
         self.tiles = new_tiles;
         self.objects = new_objects;
+
+        for pos in maybe_teleport {
+            self.apply_teleport(pos);
+        }
 
         // Check if any snek moved into exit.
         if self.fruit_count == 0 {
             for obj_idx in moving {
                 if let Some(&obj_head) = self.objects[obj_idx as usize].first() {
                     if let Tile::Snek(_) = self.get(obj_head) {
-                        if obj_head == self.exit_pos {
+                        if obj_head == self.s.exit_pos {
                             self.remove_snek(obj_idx);
                         }
                     }
@@ -378,6 +432,35 @@ impl Grid {
         true
     }
 
+    fn apply_teleport(&mut self, from: Pos) {
+        let obj = self.get(from);
+        let id = obj.get_object_id();
+        let to = self.s.teleports.get(&from).unwrap();
+        let mut new_positions: Vec<Pos> = Vec::new();
+        for pos in &self.objects[id as usize] {
+            let dy = (to.0 as i8) - (from.0 as i8);
+            let dx = (to.1 as i8) - (from.1 as i8);
+            if let Some(new_pos) =
+                pos.maybe_add(self.s.row_count as u8, self.s.col_count as u8, dy, dx)
+            {
+                if self.get(new_pos) != Tile::Empty {
+                    return;
+                }
+
+                new_positions.push(new_pos);
+            } else {
+                return;
+            }
+        }
+        for pos in self.objects[id as usize].clone() {
+            self.set(pos, Tile::Empty);
+        }
+        for pos in &new_positions {
+            self.set(*pos, obj.clone());
+        }
+        self.objects[id as usize] = new_positions;
+    }
+
     /// Tries applying movement for given snek. If it succeeds, returns the new Grid.
     pub fn do_move(&self, Move(snek_idx, dir): Move) -> Option<Grid> {
         let snek = &self.objects[snek_idx as usize];
@@ -410,7 +493,9 @@ impl Grid {
             }
             Tile::Empty | Tile::Snek(_) | Tile::Block(_) => {
                 grid = self.clone();
+
                 // If we stepping on snek or block, it means we are pushing. See if we can push.
+                // This will also fail out if we try to push ourselves.
                 if new_tile != Tile::Empty {
                     if grid.push_object(Some(snek_idx), new_tile_pos, dir) != PushResult::Moved {
                         return None;
@@ -418,7 +503,7 @@ impl Grid {
                 }
 
                 // Check if we are about to step on the exit tile while it is open.
-                if new_tile_pos == self.exit_pos && self.fruit_count == 0 {
+                if new_tile_pos == self.s.exit_pos && self.fruit_count == 0 {
                     grid.remove_snek(snek_idx);
                 } else {
                     // Insert the new head, remove last segment.
@@ -432,6 +517,13 @@ impl Grid {
             }
         };
 
+        // If we moved to a teleport spot and we weren't on it yet, see if we can teleport.
+        if self.s.teleports.contains_key(&new_tile_pos) {
+            if new_tile != grid.get(new_tile_pos) {
+                grid.apply_teleport(new_tile_pos);
+            }
+        }
+
         // step 3: apply gravity. if this returns false, snek was trying to fall off the level
         // (with at least one segment being outside the bounds), or fall on a spike.
         if !grid.apply_gravity() {
@@ -441,11 +533,18 @@ impl Grid {
         }
     }
 
+    pub fn snek_count(&self) -> u8 {
+        self.snek_count as u8
+    }
+
     fn format_tile(&self, pos: Pos) -> char {
-        if pos == self.exit_pos {
+        if pos == self.s.exit_pos {
             return 'E';
         }
         let tile = self.get(pos);
+        if tile == Tile::Empty && self.s.teleports.contains_key(&pos) {
+            return '@';
+        }
         match tile {
             Tile::Empty => '.',
             Tile::Fruit => 'F',
@@ -454,23 +553,22 @@ impl Grid {
             // 0-9a-z
             Tile::Snek(x) => std::char::from_digit(x as u32, 36).unwrap(),
             // UVWXYZ
-            Tile::Block(x) => ('U' as u8 + x - self.first_block_idx as u8) as char,
+            Tile::Block(x) => ('U' as u8 + x - self.s.first_block_idx as u8) as char,
         }
     }
 
     fn format_row(&self, row_idx: u8) -> String {
-        (0..self.col_count)
+        (0..self.s.col_count)
             .map(|col_idx| self.format_tile(Pos(row_idx, col_idx as u8)))
             .chain(std::iter::once('\n'))
             .collect()
     }
 
     pub fn format_grid(&self) -> String {
-        (0..self.row_count).map(|row_idx|
-            self.format_row(row_idx as u8)).collect()
+        (0..self.s.row_count)
+            .map(|row_idx| self.format_row(row_idx as u8))
+            .collect()
     }
-
-
 }
 
 impl PartialEq for Grid {
