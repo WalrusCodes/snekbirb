@@ -1,8 +1,10 @@
+use std::slice;
+
 use super::Direction;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct Move(pub u8, pub Direction);
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct Moves(Vec<Move>);
 
 impl Move {
@@ -81,5 +83,14 @@ impl IntoIterator for Moves {
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a Moves {
+    type Item = &'a Move;
+    type IntoIter = slice::Iter<'a, Move>; // std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.as_slice().into_iter()
     }
 }

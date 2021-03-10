@@ -1,6 +1,6 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    hash::Hash,
+    collections::{hash_map::DefaultHasher, HashMap, HashSet, VecDeque},
+    hash::{Hash, Hasher},
     rc::Rc,
 };
 
@@ -568,6 +568,12 @@ impl Grid {
         (0..self.s.row_count)
             .map(|row_idx| self.format_row(row_idx as u8))
             .collect()
+    }
+
+    pub fn hash_value(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.hash(&mut hasher);
+        hasher.finish()
     }
 }
 
