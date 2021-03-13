@@ -12,7 +12,8 @@
 // * Supported tiles are as follows:
 //         . : empty spaces
 //         E : exit
-//         F : exit
+//         F : any fruit
+//         @ : teleporter
 //         # : ground
 //         * : spiky boi
 //    0-9a-z : snek segment (in base36, see below)
