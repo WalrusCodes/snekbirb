@@ -33,7 +33,9 @@ pub enum Tile {
     // A block. The number describes the object index, in the same namespace as snek segments. The
     // positions for block segments can be found in the "objects" field.
     Block(u8),
-    // TODO: add teleports.
+    // Doom. If anything touches this tile, it's bad news. These tiles don't actually happen in the
+    // game, but we use them manually to cut down search space.
+    Doom,
 }
 
 impl Tile {
@@ -55,6 +57,7 @@ impl Hash for Tile {
             Tile::Spike => 0,
             Tile::Snek(x) => x.wrapping_add(3),
             Tile::Block(x) => x.wrapping_add(3 + 36),
+            Tile::Doom => 0,
         });
     }
 }
@@ -224,6 +227,7 @@ impl Grid {
                         }
                         Tile::Empty
                     }
+                    '%' => Tile::Doom,
                     _ => {
                         panic!("invalid input character: {}", c);
                     }
@@ -309,6 +313,9 @@ impl Grid {
                 if let Some(new_pos) = self.maybe_apply_pos(*pos, dir) {
                     match self.get(new_pos) {
                         Tile::Empty => (),
+                        Tile::Doom => {
+                            return PushResult::WouldDie;
+                        }
                         Tile::Spike => {
                             if idx < (self.s.first_block_idx as u8) {
                                 // sneks can get poked
@@ -481,7 +488,7 @@ impl Grid {
             Tile::Ground => {
                 return None;
             }
-            Tile::Spike => {
+            Tile::Spike | Tile::Doom => {
                 return None;
             }
             Tile::Fruit => {
@@ -554,6 +561,7 @@ impl Grid {
             Tile::Snek(x) => std::char::from_digit(x as u32, 36).unwrap(),
             // UVWXYZ
             Tile::Block(x) => ('U' as u8 + x - self.s.first_block_idx as u8) as char,
+            Tile::Doom => '%',
         }
     }
 
